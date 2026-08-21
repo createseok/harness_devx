@@ -44,11 +44,31 @@ fi
 
 # ── 3. 포트 정리 ───────────────────────────────────────────────────────
 step "포트 $PORT"
-EXIST=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1)
-if [ -n "$EXIST" ]; then
-  echo "  이미 사용 중 (PID $EXIST) — 종료합니다"
-  kill "$EXIST" 2>/dev/null
-  sleep 2
+# --reload 는 감시 프로세스가 워커를 다시 띄운다. 자식만 죽이면 부활하므로
+# uvicorn 프로세스 트리를 먼저 정리하고, 그다음 포트 점유자를 확인한다.
+pkill -f "uvicorn app.api.main" 2>/dev/null
+for _ in $(seq 1 10); do
+  lsof -nP -iTCP:$PORT -sTCP:LISTEN -t >/dev/null 2>&1 || break
+  sleep 1
+done
+LEFT=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | tr '\n' ' ')
+if [ -n "$LEFT" ]; then
+  echo "  아직 잡고 있습니다 (PID $LEFT) — 종료합니다"
+  for pid in $LEFT; do kill "$pid" 2>/dev/null; done
+  for _ in $(seq 1 5); do
+    lsof -nP -iTCP:$PORT -sTCP:LISTEN -t >/dev/null 2>&1 || break
+    sleep 1
+  done
+  # reload 감시 프로세스가 SIGTERM 을 무시하고 남는 경우가 있다 → 강제 종료
+  STUCK=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | tr '\n' ' ')
+  if [ -n "$STUCK" ]; then
+    echo "  응답하지 않아 강제 종료합니다 (PID $STUCK)"
+    for pid in $STUCK; do kill -9 "$pid" 2>/dev/null; done
+    sleep 2
+  fi
+fi
+if lsof -nP -iTCP:$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+  fail "포트 $PORT 를 비우지 못했습니다.  PORT=8766 ./scripts/dev.sh  로 다른 포트를 쓰세요."
 fi
 good "사용 가능"
 

@@ -347,6 +347,55 @@ class SqlStore(Store):
                 .order_by(AgentRow.created_at))).scalars().all()
             return [_agent(r) for r in rows]
 
+    async def update_channel(self, channel_id: str, *, name=None, topic=None):
+        async with self.session() as s, s.begin():
+            r = await s.get(ChannelRow, channel_id)
+            if r is None:
+                return None
+            if name is not None:
+                r.name = name
+            if topic is not None:
+                r.topic = topic
+            await s.flush()
+            return dm.Channel(r.id, r.workspace_id, r.name, r.is_dm, r.topic,
+                              r.created_at)
+
+    async def delete_channel(self, channel_id: str) -> bool:
+        """FK 순서를 지켜 자식부터 지운다 (channel_members → channels)."""
+        from sqlalchemy import delete
+        async with self.session() as s, s.begin():
+            if await s.get(ChannelRow, channel_id) is None:
+                return False
+            for table in (MemberRow, MessageRow, TaskRow, SummaryRow, RunRow):
+                await s.execute(delete(table).where(table.channel_id == channel_id))
+            await s.execute(delete(ChannelRow).where(ChannelRow.id == channel_id))
+            return True
+
+    async def update_agent(self, agent_id: str, **fields):
+        async with self.session() as s, s.begin():
+            r = await s.get(AgentRow, agent_id)
+            if r is None:
+                return None
+            for k, v in fields.items():
+                if v is None or not hasattr(r, k):
+                    continue
+                # enum 은 값으로 저장한다
+                setattr(r, k, v.value if hasattr(v, "value") else v)
+            await s.flush()
+            return _agent(r)
+
+    async def delete_agent(self, agent_id: str) -> bool:
+        """에이전트와 채널 소속만 지운다. 메시지는 그대로 둔다 (append-only)."""
+        from sqlalchemy import delete
+        async with self.session() as s, s.begin():
+            if await s.get(AgentRow, agent_id) is None:
+                return False
+            await s.execute(delete(MemberRow).where(
+                MemberRow.member_type == dm.MemberType.AGENT.value,
+                MemberRow.member_id == agent_id))
+            await s.execute(delete(AgentRow).where(AgentRow.id == agent_id))
+            return True
+
     # --- 실행 기록 ---
     async def claim_run(self, run: dm.AgentRun) -> bool:
         """UNIQUE(agent_id, trigger_message_id) 위반 = 이미 실행됨.

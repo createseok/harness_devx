@@ -96,6 +96,30 @@ def _msg_dict(m: Message) -> dict:
     }
 
 
+# --- 검증 ---
+def check_handle(v: str) -> str:
+    """디스패처의 MENTION_RE 와 같은 문자만 허용한다.
+
+    공백이나 특수문자가 들어가면 '@김 기획' 이 '@김' 까지만 파싱돼
+    영영 호출되지 않는 에이전트가 만들어진다.
+    """
+    v = (v or "").strip().lstrip("@")
+    if not v:
+        raise ValueError("이름이 비어 있습니다")
+    if not MENTION_RE.fullmatch("@" + v):
+        raise ValueError("이름에는 한글·영문·숫자·밑줄·하이픈만 쓸 수 있습니다 "
+                         "(공백 불가 — @멘션으로 부를 수 없게 됩니다)")
+    return v
+
+
+def check_role(v: str) -> str:
+    v = (v or "").strip()
+    if len(v) < 10:
+        raise ValueError("역할 설명을 10자 이상 적어주세요. "
+                         "이게 에이전트의 행동을 결정합니다.")
+    return v
+
+
 # --- 스키마 ---
 class CreateAgent(BaseModel):
     workspace_id: str
@@ -105,31 +129,36 @@ class CreateAgent(BaseModel):
     reply_mode: ReplyMode = ReplyMode.MENTION
     max_steps: int = Field(8, ge=1, le=20)
 
+    _v_name = field_validator("name")(classmethod(lambda cls, v: check_handle(v)))
+    _v_role = field_validator("role_prompt")(classmethod(lambda cls, v: check_role(v)))
+
+
+class UpdateAgent(BaseModel):
+    """부분 수정. 보내지 않은 필드는 그대로 둔다."""
+
+    name: Optional[str] = None
+    role_prompt: Optional[str] = None
+    reply_mode: Optional[ReplyMode] = None
+    model: Optional[str] = None
+    enabled: Optional[bool] = None
+    max_steps: Optional[int] = Field(None, ge=1, le=20)
+
+    _v_name = field_validator("name")(
+        classmethod(lambda cls, v: v if v is None else check_handle(v)))
+    _v_role = field_validator("role_prompt")(
+        classmethod(lambda cls, v: v if v is None else check_role(v)))
+
+
+class UpdateChannel(BaseModel):
+    name: Optional[str] = None
+    topic: Optional[str] = None
+
     @field_validator("name")
     @classmethod
-    def valid_handle(cls, v: str) -> str:
-        """디스패처의 MENTION_RE 와 같은 문자만 허용한다.
-
-        공백이나 특수문자가 들어가면 '@김 기획' 이 '@김' 까지만 파싱돼
-        영영 호출되지 않는 에이전트가 만들어진다.
-        """
-        v = v.strip().lstrip("@")
-        if not v:
-            raise ValueError("이름이 비어 있습니다")
-        if not MENTION_RE.fullmatch("@" + v):
-            raise ValueError(
-                "이름에는 한글·영문·숫자·밑줄·하이픈만 쓸 수 있습니다 "
-                "(공백 불가 — @멘션으로 부를 수 없게 됩니다)")
-        return v
-
-    @field_validator("role_prompt")
-    @classmethod
-    def has_role(cls, v: str) -> str:
-        v = v.strip()
-        if len(v) < 10:
-            raise ValueError("역할 설명을 10자 이상 적어주세요. "
-                             "이게 에이전트의 행동을 결정합니다.")
-        return v
+    def not_blank(cls, v):
+        if v is not None and not v.strip():
+            raise ValueError("채널 이름이 비어 있습니다")
+        return v.strip() if v else v
 
 
 class CreateHuman(BaseModel):
@@ -258,6 +287,53 @@ async def list_members(channel_id: str, store: Store = Depends(get_store)):
             if h:
                 out.append({"type": "human", "id": h.id, "name": h.name})
     return out
+
+
+@app.patch("/api/agents/{agent_id}")
+async def update_agent(agent_id: str, body: UpdateAgent,
+                       store: Store = Depends(get_store)):
+    agent = await store.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(404, "에이전트가 없습니다")
+    if body.name and body.name != agent.name:
+        dup = await store.get_agent_by_name(agent.workspace_id, body.name)
+        if dup and dup.id != agent_id:
+            raise HTTPException(409, f"'{body.name}' 핸들이 이미 사용 중입니다")
+    updated = await store.update_agent(
+        agent_id, **body.model_dump(exclude_none=True))
+    return updated
+
+
+@app.delete("/api/agents/{agent_id}")
+async def delete_agent(agent_id: str, store: Store = Depends(get_store)):
+    """워크스페이스에서 완전히 지운다. 과거 메시지는 남는다."""
+    if not await store.delete_agent(agent_id):
+        raise HTTPException(404, "에이전트가 없습니다")
+    return {"ok": True}
+
+
+@app.patch("/api/channels/{channel_id}")
+async def update_channel(channel_id: str, body: UpdateChannel,
+                         store: Store = Depends(get_store)):
+    updated = await store.update_channel(
+        channel_id, **body.model_dump(exclude_none=True))
+    if updated is None:
+        raise HTTPException(404, "채널이 없습니다")
+    return updated
+
+
+@app.delete("/api/channels/{channel_id}")
+async def delete_channel(channel_id: str, confirm: str = "",
+                         store: Store = Depends(get_store)):
+    """되돌릴 수 없다. 실수 방지를 위해 채널 이름을 confirm 으로 받는다."""
+    ch = await store.get_channel(channel_id)
+    if ch is None:
+        raise HTTPException(404, "채널이 없습니다")
+    if confirm != ch.name:
+        raise HTTPException(
+            400, f"확인을 위해 채널 이름('{ch.name}')을 정확히 입력하세요")
+    await store.delete_channel(channel_id)
+    return {"ok": True}
 
 
 @app.post("/api/channels")

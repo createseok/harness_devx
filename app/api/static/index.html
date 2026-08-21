@@ -188,7 +188,13 @@ button:disabled { opacity: .45; cursor: default; }
 .pick .nm { font-weight: 600; flex: none; }
 .pick .ro { color: var(--muted); font-size: 12px; overflow: hidden;
             text-overflow: ellipsis; white-space: nowrap; }
-.modal-err { color: #e5484d; font-size: 12px; margin-bottom: 10px; }
+.modal-err { color: #e5484d; font-size: 12px; margin-bottom: 10px; white-space: pre-wrap; }
+.sheet .foot .danger { background: none; color: #e5484d; margin-right: auto; }
+.sheet .foot .danger:hover { background: rgba(229,72,77,.12); }
+.warn { background: rgba(229,72,77,.08); border: 1px solid rgba(229,72,77,.3);
+        border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.6;
+        color: var(--text); margin-bottom: 14px; }
+.warn b { color: #e5484d; }
 </style>
 </head>
 <body>
@@ -291,7 +297,13 @@ async function loadMembers() {
       <button type="button" class="x" title="채널에서 빼기">×</button>
     </div>`).join("");
   $("#members").querySelectorAll(".row").forEach((row) => {
-    row.querySelector(".x").onclick = (e) => { e.stopPropagation(); removeMember(ms[+row.dataset.i]); };
+    const mem = ms[+row.dataset.i];
+    row.querySelector(".x").onclick = (e) => { e.stopPropagation(); removeMember(mem); };
+    if (mem.type === "agent") {
+      row.style.cursor = "pointer";
+      row.title = (mem.role || "") + "\n\n클릭하면 편집";
+      row.onclick = () => openAgentModal(mem.id);
+    }
   });
 }
 
@@ -299,9 +311,12 @@ async function loadMembers() {
 async function refreshChannels(selectId) {
   const channels = await api(`/api/channels?workspace_id=${WS}`);
   $("#channels").innerHTML = channels.map((c) =>
-    `<div class="row" data-id="${c.id}"><span class="nm"># ${esc(c.name)}</span></div>`).join("");
+    `<div class="row" data-id="${c.id}"><span class="nm"># ${esc(c.name)}</span>
+       <button type="button" class="x" title="채널 설정">⋯</button></div>`).join("");
   channels.forEach((c) => {
-    $(`#channels .row[data-id="${c.id}"]`).onclick = () => selectChannel(c);
+    const row = $(`#channels .row[data-id="${c.id}"]`);
+    row.onclick = () => selectChannel(c);
+    row.querySelector(".x").onclick = (e) => { e.stopPropagation(); openChannelModal(c); };
   });
   const target = channels.find((c) => c.id === (selectId || channel)) || channels[0];
   if (target) await selectChannel(target);
@@ -565,6 +580,125 @@ async function removeMember(m) {
     await api(`/api/channels/${channel}/members/${m.type}/${m.id}`, { method: "DELETE" });
     await loadMembers();
   } catch (e) { fail("제거 실패: " + e.message); }
+}
+
+// ── 에이전트 편집 / 삭제 ──────────────────────────────────────────────
+async function openAgentModal(agentId) {
+  const all = await api(`/api/agents?workspace_id=${WS}`);
+  const a = all.find((x) => x.id === agentId);
+  if (!a) return fail("에이전트를 찾을 수 없습니다.");
+
+  // 어느 채널에 속해 있는지 — 삭제 영향 범위를 미리 보여준다
+  const channels = await api(`/api/channels?workspace_id=${WS}`);
+  const rosters = await Promise.all(
+    channels.map((c) => api(`/api/channels/${c.id}/members`).then((ms) => ({ c, ms }))));
+  const inChannels = rosters
+    .filter(({ ms }) => ms.some((m) => m.type === "agent" && m.id === agentId))
+    .map(({ c }) => c.name);
+
+  openModal(`에이전트 편집 — @${a.name}`, `
+    <div class="fld"><label>이름<span class="help">@멘션 핸들 · 공백 불가</span></label>
+      <input type="text" id="eName" value="${esc(a.name)}"></div>
+    <div class="fld"><label>역할<span class="help">구체적일수록 잘 협업합니다</span></label>
+      <textarea id="eRole">${esc(a.role_prompt)}</textarea></div>
+    <div class="fld"><label>응답 조건</label>
+      <select id="eMode">
+        <option value="mention"${a.reply_mode === "mention" ? " selected" : ""}>@멘션 됐을 때만 (권장)</option>
+        <option value="all"${a.reply_mode === "all" ? " selected" : ""}>채널의 모든 메시지에 반응</option>
+      </select></div>
+    <div class="fld"><label>상태</label>
+      <select id="eEnabled">
+        <option value="1"${a.enabled ? " selected" : ""}>활성 — 호출되면 응답</option>
+        <option value="0"${a.enabled ? "" : " selected"}>비활성 — 멘션돼도 응답 안 함</option>
+      </select></div>
+    <div class="help" style="margin-top:-6px">
+      소속 채널: ${inChannels.length ? inChannels.map((n) => "#" + esc(n)).join(", ") : "없음"}</div>
+  `, save, "저장");
+
+  // 삭제 버튼을 푸터 왼쪽에 붙인다
+  const del = document.createElement("button");
+  del.type = "button"; del.className = "danger"; del.textContent = "삭제";
+  del.onclick = () => confirmDelete();
+  $("#modal .foot").prepend(del);
+
+  async function save() {
+    const name = $("#eName").value.trim();
+    const role = $("#eRole").value.trim();
+    if (!name || !role) return modalErr("이름과 역할을 모두 입력하세요.");
+    await api(`/api/agents/${agentId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, role_prompt: role,
+                             reply_mode: $("#eMode").value,
+                             enabled: $("#eEnabled").value === "1" }),
+    });
+    closeModal();
+    await loadMembers();
+  }
+
+  function confirmDelete() {
+    openModal(`@${a.name} 삭제`, `
+      <div class="warn">
+        <b>되돌릴 수 없습니다.</b><br>
+        · 워크스페이스에서 완전히 사라집니다
+        ${inChannels.length ? `<br>· 속한 채널에서 빠집니다 — ${inChannels.map((n) => "#" + esc(n)).join(", ")}` : ""}
+        <br>· <b>과거 발언은 채널에 그대로 남습니다</b> (기록은 지우지 않습니다)
+      </div>
+      <div class="fld"><label>확인을 위해 <b>${esc(a.name)}</b> 을(를) 입력하세요</label>
+        <input type="text" id="dName" placeholder="${esc(a.name)}"></div>
+    `, async () => {
+      if ($("#dName").value.trim() !== a.name) return modalErr("이름이 일치하지 않습니다.");
+      await api(`/api/agents/${agentId}`, { method: "DELETE" });
+      closeModal();
+      await loadMembers();
+    }, "영구 삭제");
+    $("#modal .foot #mOk").className = "danger";
+    $("#modal .foot #mOk").style.marginRight = "0";
+  }
+}
+
+// ── 채널 설정 / 삭제 ──────────────────────────────────────────────────
+function openChannelModal(c) {
+  openModal(`채널 설정 — #${c.name}`, `
+    <div class="fld"><label>이름</label>
+      <input type="text" id="uName" value="${esc(c.name)}"></div>
+    <div class="fld"><label>주제<span class="help">선택</span></label>
+      <input type="text" id="uTopic" value="${esc(c.topic || "")}"></div>
+  `, async () => {
+    const name = $("#uName").value.trim();
+    if (!name) return modalErr("채널 이름을 입력하세요.");
+    await api(`/api/channels/${c.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, topic: $("#uTopic").value.trim() }),
+    });
+    closeModal();
+    await refreshChannels(c.id);
+  }, "저장");
+
+  const del = document.createElement("button");
+  del.type = "button"; del.className = "danger"; del.textContent = "채널 삭제";
+  del.onclick = () => {
+    openModal(`#${c.name} 삭제`, `
+      <div class="warn">
+        <b>되돌릴 수 없습니다.</b><br>
+        이 채널의 <b>메시지·태스크·요약·실행기록이 모두 삭제</b>됩니다.<br>
+        에이전트 자체는 다른 채널에 그대로 남습니다.
+      </div>
+      <div class="fld"><label>확인을 위해 <b>${esc(c.name)}</b> 을(를) 입력하세요</label>
+        <input type="text" id="dCh" placeholder="${esc(c.name)}"></div>
+    `, async () => {
+      const typed = $("#dCh").value.trim();
+      if (typed !== c.name) return modalErr("채널 이름이 일치하지 않습니다.");
+      await api(`/api/channels/${c.id}?confirm=${encodeURIComponent(typed)}`,
+                { method: "DELETE" });
+      closeModal();
+      if (channel === c.id) { channel = null; if (es) es.close(); }
+      const left = await refreshChannels();
+      if (!left.length) location.reload();
+    }, "영구 삭제");
+    $("#modal .foot #mOk").className = "danger";
+    $("#modal .foot #mOk").style.marginRight = "0";
+  };
+  $("#modal .foot").prepend(del);
 }
 
 // ── @멘션 자동완성 ────────────────────────────────────────────────────

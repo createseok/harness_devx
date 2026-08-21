@@ -149,6 +149,50 @@ class InMemoryStore(Store):
                        if a.workspace_id == workspace_id),
                       key=lambda a: a.created_at)
 
+    async def update_channel(self, channel_id: str, *, name=None, topic=None):
+        ch = self.channels.get(channel_id)
+        if ch is None:
+            return None
+        if name is not None:
+            ch.name = name
+        if topic is not None:
+            ch.topic = topic
+        return ch
+
+    async def delete_channel(self, channel_id: str) -> bool:
+        if channel_id not in self.channels:
+            return False
+        for mid in self.channel_index.pop(channel_id, []):
+            self.messages.pop(mid, None)
+        self.members.pop(channel_id, None)
+        self.summaries.pop(channel_id, None)
+        for tid in [k for k, v in self.tasks.items() if v.channel_id == channel_id]:
+            del self.tasks[tid]
+        for rid in [k for k, v in self.runs.items() if v.channel_id == channel_id]:
+            self._claimed.discard(self.runs[rid].idem_key)
+            del self.runs[rid]
+        del self.channels[channel_id]
+        return True
+
+    async def update_agent(self, agent_id: str, **fields):
+        a = self.agents.get(agent_id)
+        if a is None:
+            return None
+        for k, v in fields.items():
+            if v is not None and hasattr(a, k):
+                setattr(a, k, v)
+        return a
+
+    async def delete_agent(self, agent_id: str) -> bool:
+        if agent_id not in self.agents:
+            return False
+        for cid, lst in self.members.items():
+            self.members[cid] = [x for x in lst
+                                 if not (x.member_type == MemberType.AGENT
+                                         and x.member_id == agent_id)]
+        del self.agents[agent_id]
+        return True   # 메시지는 그대로 둔다 (append-only)
+
     # --- 실행 기록 ---
     async def claim_run(self, run: AgentRun) -> bool:
         async with self._lock:

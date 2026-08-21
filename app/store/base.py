@@ -81,6 +81,26 @@ class Store(abc.ABC):
     @abc.abstractmethod
     async def list_agents(self, workspace_id: str) -> List[Agent]: ...
 
+    @abc.abstractmethod
+    async def update_channel(self, channel_id: str, *, name: Optional[str] = None,
+                             topic: Optional[str] = None) -> Optional[Channel]: ...
+
+    @abc.abstractmethod
+    async def delete_channel(self, channel_id: str) -> bool:
+        """채널과 그 안의 메시지·태스크·요약·실행기록을 모두 지운다. 되돌릴 수 없다."""
+
+    @abc.abstractmethod
+    async def update_agent(self, agent_id: str, **fields) -> Optional[Agent]: ...
+
+    @abc.abstractmethod
+    async def delete_agent(self, agent_id: str) -> bool:
+        """에이전트와 모든 채널 소속을 지운다.
+
+        **과거 메시지는 지우지 않는다.** 메시지는 append-only 이벤트 로그이고,
+        지우면 히스토리가 다시 쓰여진다. author_name 이 메시지에 비정규화되어
+        있어 삭제된 에이전트의 발언도 그대로 렌더링된다.
+        """
+
     # --- 실행 기록 (멱등성 + 과금) ---
     @abc.abstractmethod
     async def claim_run(self, run: AgentRun) -> bool:
