@@ -16,34 +16,95 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 
-@dataclass
+class TraceLedger:
+    """연쇄 전체가 **공유하는** 가변 원장.
+
+    분기(fan-out)가 핵심이다. 기획자가 분석가와 개발자를 동시에 부르면
+    가지가 둘로 갈라지는데, 각 가지가 자기 카운터를 가지면 상한이 곱절로
+    늘어나 예산이 무력화된다. 그래서 원장은 trace 당 **정확히 하나**만
+    존재하고 모든 가지가 같은 객체를 참조한다.
+    """
+
+    __slots__ = ("trace_id", "max_tokens", "max_runs", "tokens_spent", "runs_spent")
+
+    def __init__(self, trace_id: str = "", max_tokens: int = 120_000,
+                 max_runs: int = 20) -> None:
+        self.trace_id = trace_id
+        self.max_tokens = max_tokens
+        self.max_runs = max_runs
+        self.tokens_spent = 0
+        self.runs_spent = 0
+
+    def exhausted(self) -> Optional[str]:
+        if self.tokens_spent >= self.max_tokens:
+            return f"토큰 예산 소진 ({self.tokens_spent:,} >= {self.max_tokens:,})"
+        if self.runs_spent >= self.max_runs:
+            return f"실행 횟수 한계 초과 ({self.runs_spent} >= {self.max_runs})"
+        return None
+
+
 class TraceBudget:
-    """사람의 한 마디에서 시작된 연쇄 전체에 걸리는 예산."""
+    """사람의 한 마디에서 시작된 연쇄에 걸리는 예산.
 
-    trace_id: str
-    depth: int = 0
+    depth 는 가지마다 다르고(per-branch), 토큰·실행횟수는 연쇄 전체가
+    공유한다(shared ledger). 이 구분이 핵심이다.
+    """
 
-    #: 에이전트→에이전트 홉 최대 횟수. 넘으면 mention_agent 도구가 사라진다.
-    max_depth: int = 4
-    #: 연쇄 전체 토큰 상한. 넘으면 턴 자체를 시작하지 않는다.
-    max_tokens: int = 120_000
-    #: 연쇄 전체 에이전트 실행 횟수 상한.
-    max_runs: int = 20
+    def __init__(
+        self,
+        trace_id: str = "",
+        depth: int = 0,
+        #: 에이전트→에이전트 홉 최대 횟수. 넘으면 mention_agent 도구가 사라진다.
+        max_depth: int = 4,
+        #: 연쇄 전체 토큰 상한 (원장 공유)
+        max_tokens: int = 120_000,
+        #: 연쇄 전체 에이전트 실행 횟수 상한 (원장 공유)
+        max_runs: int = 20,
+        ledger: Optional[TraceLedger] = None,
+    ) -> None:
+        self.depth = depth
+        self.max_depth = max_depth
+        self.ledger = ledger if ledger is not None else TraceLedger(
+            trace_id, max_tokens, max_runs
+        )
 
-    tokens_spent: int = 0
-    runs_spent: int = 0
+    # --- 원장 위임 (기존 호출부 호환) ---
+    @property
+    def trace_id(self) -> str:
+        return self.ledger.trace_id
+
+    @property
+    def max_tokens(self) -> int:
+        return self.ledger.max_tokens
+
+    @property
+    def max_runs(self) -> int:
+        return self.ledger.max_runs
+
+    @property
+    def tokens_spent(self) -> int:
+        return self.ledger.tokens_spent
+
+    @tokens_spent.setter
+    def tokens_spent(self, value: int) -> None:
+        self.ledger.tokens_spent = value
+
+    @property
+    def runs_spent(self) -> int:
+        return self.ledger.runs_spent
+
+    @runs_spent.setter
+    def runs_spent(self, value: int) -> None:
+        self.ledger.runs_spent = value
 
     def child(self) -> "TraceBudget":
-        """다음 홉으로 넘길 예산. depth만 증가하고 나머지는 공유된다."""
-        return TraceBudget(
-            trace_id=self.trace_id,
-            depth=self.depth + 1,
-            max_depth=self.max_depth,
-            max_tokens=self.max_tokens,
-            max_runs=self.max_runs,
-            tokens_spent=self.tokens_spent,
-            runs_spent=self.runs_spent,
-        )
+        """다음 홉으로 넘길 예산.
+
+        depth 만 증가하고 원장은 **같은 객체를 그대로 넘긴다.**
+        (복사하면 분기마다 예산이 리셋되어 상한이 무력화된다)
+        """
+        return TraceBudget(depth=self.depth + 1, max_depth=self.max_depth,
+                           ledger=self.ledger)
 
     @property
     def can_mention_agents(self) -> bool:
@@ -57,11 +118,12 @@ class TraceBudget:
     def exhausted(self) -> Optional[str]:
         if self.depth > self.max_depth:
             return f"멘션 깊이 한계 초과 (depth={self.depth} > {self.max_depth})"
-        if self.tokens_spent >= self.max_tokens:
-            return f"토큰 예산 소진 ({self.tokens_spent:,} >= {self.max_tokens:,})"
-        if self.runs_spent >= self.max_runs:
-            return f"실행 횟수 한계 초과 ({self.runs_spent} >= {self.max_runs})"
-        return None
+        return self.ledger.exhausted()
+
+    def __repr__(self) -> str:
+        return (f"TraceBudget(trace={self.trace_id!r}, depth={self.depth}/{self.max_depth}, "
+                f"runs={self.runs_spent}/{self.max_runs}, "
+                f"tokens={self.tokens_spent}/{self.max_tokens})")
 
 
 class PingPongDetector:

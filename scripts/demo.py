@@ -2,6 +2,10 @@
 
     PYTHONPATH=. python3 scripts/demo.py
 
+실제 LLM으로 돌리려면:
+
+    PYTHONPATH=. python3 scripts/demo.py --provider claude_cli
+
 시나리오: #결제-이슈 채널에 사람이 요청 → 기획자가 받아 분석가에게 위임 →
 분석가가 결과를 내고 개발자에게 넘김 → 개발자가 조치안을 보고.
 """
@@ -79,19 +83,35 @@ def printer(m: Message):
 
 
 async def main() -> int:
+    # --provider 로 백엔드를 갈아끼운다. 애플리케이션 코드는 그대로다.
+    name = "mock"
+    for i, a in enumerate(sys.argv):
+        if a == "--provider" and i + 1 < len(sys.argv):
+            name = sys.argv[i + 1]
+
     store = InMemoryStore()
     ch, human = seed(store)
-    provider = ScriptedProvider(SCRIPT)
+
+    if name == "mock":
+        provider = ScriptedProvider(SCRIPT)
+    else:
+        from app.llm.registry import build_provider
+        provider = build_provider(name)
+    live = name != "mock"
 
     engine = Engine(
         store, provider, registry,
-        default_budget=TraceBudget(trace_id="", max_depth=4, max_runs=20),
+        # 실제 LLM일 때는 비용/시간을 감안해 예산을 조인다
+        default_budget=TraceBudget(trace_id="", max_depth=3 if live else 4,
+                                   max_runs=8 if live else 20),
         on_message=printer,
     )
     await engine.start()
 
     print("=" * 72)
     print(f"#{ch.name} — {ch.topic}")
+    print(f"provider={name}  native_tools={provider.supports_native_tools}"
+          + (f"  model={provider.default_model}" if live else ""))
     print("=" * 72 + "\n")
 
     await engine.submit(Message(
@@ -105,25 +125,29 @@ async def main() -> int:
 
     print("=" * 72)
     s = engine.stats
-    print(f"에이전트 턴: {s.turns}회   메시지: {s.messages}개   "
-          f"토큰(mock): {s.tokens:,}")
+    print(f"에이전트 턴: {s.turns}회   메시지: {s.messages}개   토큰: {s.tokens:,}")
+    cost = getattr(provider, "total_cost_usd", 0.0)
+    if cost:
+        print(f"비용: ${cost:.4f}")
     if s.skipped:
         print(f"깨우지 않음: {len(s.skipped)}건")
         for x in s.skipped:
             print(f"  - {x}")
 
     # 검증
-    ok = True
     transcript = await store.recent_messages(ch.id, limit=100)
     speakers = [m.author_name for m in transcript]
-    for expected in ["기획자", "데이터분석가", "개발자"]:
-        if expected not in speakers:
-            print(f"✗ {expected} 가 발언하지 않았습니다")
-            ok = False
+    agents_spoke = [n for n in ["기획자", "데이터분석가", "개발자"] if n in speakers]
+    # mock 은 대본대로 3명 전원, 실제 LLM 은 최소 2명 이상 위임이 일어나면 성공
+    need = 3 if not live else 2
+    ok = len(agents_spoke) >= need
+    if not ok:
+        print(f"✗ 발언한 에이전트 {agents_spoke} (최소 {need}명 필요)")
     depths = {m.author_name: m.depth for m in transcript}
     print(f"\n홉 깊이: {depths}")
     print("툴 로그(관측용, UI에서는 접힘):",
           len([m for m in store.messages.values() if m.kind == MessageKind.TOOL_LOG]), "건")
+    print(f"발언한 에이전트: {agents_spoke}")
     print("\n" + ("✓ 위임 체인 정상 동작" if ok else "✗ 체인 끊김"))
     return 0 if ok else 1
 

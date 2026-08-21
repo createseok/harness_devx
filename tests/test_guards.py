@@ -61,6 +61,23 @@ def run() -> int:
     f += check("핑퐁이 depth 한계 전에 차단됨", blocked_at is not None, True)
     print(f"       → {blocked_at}번째 홉에서 차단 (depth 한계 99인데도)")
 
+    # ★ 회귀 방지: 분기(fan-out)해도 예산 원장이 공유되어야 한다.
+    # 이걸 놓쳐서 실제 데모가 max_runs=8 인데 24턴 돌고 $7.39 를 썼다.
+    root = TraceBudget("t_fan", max_runs=8, max_tokens=1000)
+    left, right = root.child(), root.child()        # 기획자 → 분석가 + 개발자
+    left.runs_spent += 3
+    right.runs_spent += 3
+    deep = left.child()
+    deep.runs_spent += 2
+    f += check("분기해도 실행횟수 합산", root.runs_spent, 8)
+    f += check("깊은 가지도 같은 원장 참조", deep.runs_spent, 8)
+    f += check("합산 결과로 상한 도달", root.exhausted() is not None, True)
+    left.tokens_spent += 600
+    right.tokens_spent += 500
+    f += check("분기해도 토큰 합산", root.tokens_spent, 1100)
+    f += check("depth 는 가지마다 독립", (root.depth, left.depth, deep.depth), (0, 1, 2))
+    f += check("한 가지의 depth 가 다른 가지에 영향 없음", right.depth, 1)
+
     # 정상적인 릴레이 A→B→C 는 막히면 안 됨
     det2 = PingPongDetector()
     g3 = TurnGate(det2)
