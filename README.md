@@ -107,6 +107,25 @@ USE_MEMORY_STORE=1 LLM_PROVIDER=claude_cli PYTHONPATH=. \
 
 `USE_MEMORY_STORE=1` 이면 Postgres 없이 뜬다. 재시작하면 데이터는 사라진다.
 
+### Postgres 로 띄우기 (권장)
+
+```bash
+brew install postgresql@17 && brew services start postgresql@17
+psql -d postgres -c "CREATE ROLE genteam LOGIN PASSWORD 'genteam';"
+psql -d postgres -c "CREATE DATABASE genteam OWNER genteam;"
+
+DATABASE_URL="postgresql+asyncpg://genteam:genteam@127.0.0.1/genteam" \
+LLM_PROVIDER=claude_cli PYTHONPATH=. \
+  .venv/bin/uvicorn app.api.main:app --port 8765
+```
+
+테이블 7개는 기동 시 자동 생성된다. 검증:
+
+```bash
+DATABASE_URL="postgresql+asyncpg://genteam:genteam@127.0.0.1/genteam" \
+  PYTHONPATH=. .venv/bin/python tests/test_sql_store.py
+```
+
 ### 엔드포인트
 
 | Method | Path | 용도 |
@@ -170,7 +189,7 @@ app/
 | 요금 폭발 | trace 단위 토큰·실행횟수 상한 | `guards.py` `TraceBudget` |
 | 동시 응답 폭주 | 기본 reply_mode = `MENTION` (멘션돼야만 반응) | `router.py` |
 | 자기 자신 트리거 | author == self 차단 + `TOOL_LOG`는 아무도 안 깨움 | `router.py` |
-| 중복 실행 | `UNIQUE(agent_id, trigger_message_id)` | `sql.py` `claim_run` |
+| 중복 실행 | `UNIQUE(agent_id, trigger_message_id)` — 동시 8건 경합에서 정확히 1건만 통과 확인 | `sql.py` `claim_run` |
 | 자기 말에 자기가 답함 | (agent, channel) 당 동시 실행 1개 락 | `engine.py` `_lock_for` |
 
 깊이 한계에서 턴을 **실패시키지 않고** 도구만 뺏는 게 핵심이다.
@@ -195,6 +214,7 @@ app/
 
 | 지금 | 프로덕션 |
 |---|---|
+| ~~인메모리 저장소~~ | ~~Postgres~~ — **완료** (`store/sql.py`) |
 | `asyncio.Queue` | Redis Streams (consumer group) — `engine.py::_queue` |
 | `asyncio.Lock` | Redis 분산 락 — `engine.py::_locks` |
 | 인메모리 EventBus | Redis pub/sub — `bus.py` |
