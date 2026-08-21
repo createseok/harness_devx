@@ -24,7 +24,8 @@ done
 # Postgres 가 떠 있으면 SqlStore 검증도 함께 돌린다
 if [ -n "${DATABASE_URL:-}" ] || nc -z 127.0.0.1 5432 2>/dev/null; then
   echo ""
-  export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://genteam:genteam@127.0.0.1/genteam}"
+  # 테스트는 TRUNCATE 를 하므로 반드시 전용 DB 를 쓴다 (개발 DB 보호)
+  export TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql+asyncpg://genteam:genteam@127.0.0.1/genteam_test}"
   for t in tests/test_sql_store.py tests/test_tasks.py; do
     echo "═══ $t (Postgres) ═══"
     $PY "$t" > /tmp/genteam_check.out 2>&1

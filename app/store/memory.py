@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Set
 
 from app.core.models import (
     Agent, AgentRun, Channel, ChannelMember, Human, MemberType, Message,
-    MessageKind, Task, TaskStatus,
+    MessageKind, RunStatus, Task, TaskStatus,
 )
 from app.store.base import Store
 
@@ -102,6 +102,16 @@ class InMemoryStore(Store):
     async def get_channel(self, channel_id: str) -> Optional[Channel]:
         return self.channels.get(channel_id)
 
+    async def list_channels(self, workspace_id: str) -> List[Channel]:
+        return sorted((c for c in self.channels.values()
+                       if c.workspace_id == workspace_id),
+                      key=lambda c: c.created_at)
+
+    async def list_agents(self, workspace_id: str) -> List[Agent]:
+        return sorted((a for a in self.agents.values()
+                       if a.workspace_id == workspace_id),
+                      key=lambda a: a.created_at)
+
     # --- 실행 기록 ---
     async def claim_run(self, run: AgentRun) -> bool:
         async with self._lock:
@@ -113,6 +123,10 @@ class InMemoryStore(Store):
 
     async def finish_run(self, run: AgentRun) -> None:
         self.runs[run.id] = run
+
+    async def running_runs(self, channel_id: str) -> List[AgentRun]:
+        return [r for r in self.runs.values()
+                if r.channel_id == channel_id and r.status == RunStatus.RUNNING]
 
     async def trace_usage(self, trace_id: str) -> int:
         return sum(

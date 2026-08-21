@@ -1,6 +1,6 @@
 """SqlStore 실동작 검증 (Postgres 필요).
 
-    DATABASE_URL=postgresql+asyncpg://genteam:genteam@127.0.0.1/genteam \
+    TEST_DATABASE_URL=postgresql+asyncpg://genteam:genteam@127.0.0.1/genteam_test \
       PYTHONPATH=. .venv/bin/python tests/test_sql_store.py
 
 인메모리 구현과 같은 계약을 지키는지, 특히 claim_run 의 원자성을 본다.
@@ -19,7 +19,9 @@ from app.core.models import (
 )
 from app.store.sql import SqlStore
 
-URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://genteam:genteam@127.0.0.1/genteam")
+from tests._dbutil import DEFAULT, fresh_store, resolve_test_url
+
+URL = resolve_test_url() or DEFAULT
 WS = "ws_sqltest"
 
 
@@ -31,15 +33,7 @@ def check(label, actual, expected):
 
 async def run() -> int:
     f = 0
-    store = SqlStore(URL)
-    await store.create_all()
-
-    # 매 실행마다 깨끗한 상태로 (유니크 제약 충돌 방지)
-    from sqlalchemy import text
-    async with store.engine.begin() as conn:
-        for t in ("agent_runs", "messages", "channel_members", "tasks",
-                  "agents", "humans", "channels"):
-            await conn.execute(text(f"TRUNCATE TABLE {t} CASCADE"))
+    store = await fresh_store(URL)   # 테스트 DB 인지 확인 후 비운다
 
     from app.store.sql import AgentRow, ChannelRow, HumanRow, MemberRow
     ch_id, h_id, a_id, b_id = new_id("ch"), new_id("usr"), new_id("agt"), new_id("agt")

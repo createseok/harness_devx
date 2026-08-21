@@ -239,6 +239,21 @@ class SqlStore(Store):
             return dm.Channel(r.id, r.workspace_id, r.name, r.is_dm, r.topic,
                               r.created_at) if r else None
 
+    async def list_channels(self, workspace_id: str):
+        async with self.session() as s:
+            rows = (await s.execute(
+                select(ChannelRow).where(ChannelRow.workspace_id == workspace_id)
+                .order_by(ChannelRow.created_at))).scalars().all()
+            return [dm.Channel(r.id, r.workspace_id, r.name, r.is_dm, r.topic,
+                               r.created_at) for r in rows]
+
+    async def list_agents(self, workspace_id: str):
+        async with self.session() as s:
+            rows = (await s.execute(
+                select(AgentRow).where(AgentRow.workspace_id == workspace_id)
+                .order_by(AgentRow.created_at))).scalars().all()
+            return [_agent(r) for r in rows]
+
     # --- 실행 기록 ---
     async def claim_run(self, run: dm.AgentRun) -> bool:
         """UNIQUE(agent_id, trigger_message_id) 위반 = 이미 실행됨.
@@ -267,6 +282,18 @@ class SqlStore(Store):
             r.prompt_tokens = run.prompt_tokens
             r.completion_tokens = run.completion_tokens
             r.error = run.error
+
+    async def running_runs(self, channel_id: str):
+        async with self.session() as s:
+            rows = (await s.execute(
+                select(RunRow).where(RunRow.channel_id == channel_id,
+                                     RunRow.status == dm.RunStatus.RUNNING.value)
+                .order_by(RunRow.created_at))).scalars().all()
+            return [dm.AgentRun(
+                id=r.id, agent_id=r.agent_id, channel_id=r.channel_id,
+                trigger_message_id=r.trigger_message_id, trace_id=r.trace_id,
+                depth=r.depth, status=dm.RunStatus(r.status), steps=r.steps,
+                created_at=r.created_at) for r in rows]
 
     async def trace_usage(self, trace_id: str) -> int:
         async with self.session() as s:

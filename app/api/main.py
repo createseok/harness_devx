@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -143,6 +144,14 @@ class PostMessage(BaseModel):
 
 
 # --- 엔드포인트 ---
+UI_FILE = Path(__file__).parent / "static" / "index.html"
+
+
+@app.get("/")
+async def index():
+    return FileResponse(UI_FILE)
+
+
 @app.get("/healthz")
 async def healthz():
     provider = state.get("provider")
@@ -171,6 +180,26 @@ async def create_agent(body: CreateAgent, store: Store = Depends(get_store)):
                 max_steps=agent.max_steps, created_at=agent.created_at,
             ))
     return agent
+
+
+@app.get("/api/channels")
+async def list_channels(workspace_id: str = "ws_demo",
+                        store: Store = Depends(get_store)):
+    return [
+        {"id": c.id, "name": c.name, "topic": c.topic, "is_dm": c.is_dm}
+        for c in await store.list_channels(workspace_id)
+    ]
+
+
+@app.get("/api/agents")
+async def list_agents(workspace_id: str = "ws_demo",
+                      store: Store = Depends(get_store)):
+    return [
+        {"id": a.id, "name": a.name, "role_prompt": a.role_prompt,
+         "reply_mode": a.reply_mode.value, "enabled": a.enabled,
+         "model": a.model}
+        for a in await store.list_agents(workspace_id)
+    ]
 
 
 @app.post("/api/humans")
@@ -259,6 +288,19 @@ async def post_message(channel_id: str, body: PostMessage,
     )
     asyncio.ensure_future(engine.submit(msg))
     return _msg_dict(msg)
+
+
+@app.get("/api/channels/{channel_id}/activity")
+async def channel_activity(channel_id: str, store: Store = Depends(get_store)):
+    """지금 일하고 있는 에이전트. claude -p 는 호출당 1~2분이라
+    이 표시가 없으면 사용자는 멈춘 것인지 도는 것인지 알 수 없다."""
+    out = []
+    for r in await store.running_runs(channel_id):
+        a = await store.get_agent(r.agent_id)
+        out.append({"agent_id": r.agent_id, "name": a.name if a else r.agent_id,
+                    "steps": r.steps, "depth": r.depth,
+                    "started_at": r.created_at})
+    return {"working": out}
 
 
 @app.get("/api/channels/{channel_id}/tasks")

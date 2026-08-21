@@ -51,6 +51,12 @@ class Store(abc.ABC):
     @abc.abstractmethod
     async def get_channel(self, channel_id: str) -> Optional[Channel]: ...
 
+    @abc.abstractmethod
+    async def list_channels(self, workspace_id: str) -> List[Channel]: ...
+
+    @abc.abstractmethod
+    async def list_agents(self, workspace_id: str) -> List[Agent]: ...
+
     # --- 실행 기록 (멱등성 + 과금) ---
     @abc.abstractmethod
     async def claim_run(self, run: AgentRun) -> bool:
@@ -61,6 +67,14 @@ class Store(abc.ABC):
 
     @abc.abstractmethod
     async def finish_run(self, run: AgentRun) -> None: ...
+
+    @abc.abstractmethod
+    async def running_runs(self, channel_id: str) -> List[AgentRun]:
+        """지금 실행 중인 턴. UI 의 "작업 중" 표시에 쓴다.
+
+        claude -p 는 호출당 1~2분이 걸린다. 이 표시가 없으면 사용자는
+        시스템이 멈춘 것인지 일하는 중인지 구분할 수 없다.
+        """
 
     @abc.abstractmethod
     async def trace_usage(self, trace_id: str) -> int:

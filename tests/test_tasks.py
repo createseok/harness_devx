@@ -1,7 +1,8 @@
 """태스크 보드 검증.
 
 두 저장소 구현(인메모리/Postgres) 모두에 같은 시나리오를 돌린다.
-DATABASE_URL 이 있으면 SqlStore 도 함께 검증한다.
+TEST_DATABASE_URL(또는 DATABASE_URL 에서 파생한 _test DB)이 있으면
+SqlStore 도 함께 검증한다. 개발 DB 는 절대 건드리지 않는다.
 """
 from __future__ import annotations
 
@@ -144,16 +145,11 @@ async def run() -> int:
     store, ch = await build_memory()
     f += await scenario(store, ch.id, "InMemoryStore")
 
-    url = os.getenv("DATABASE_URL")
+    from tests._dbutil import fresh_store, resolve_test_url
+    url = resolve_test_url()
     if url:
-        from sqlalchemy import text
-        from app.store.sql import AgentRow, ChannelRow, HumanRow, MemberRow, SqlStore
-        sql = SqlStore(url)
-        await sql.create_all()
-        async with sql.engine.begin() as conn:
-            for t in ("agent_runs", "messages", "channel_members", "tasks",
-                      "agents", "humans", "channels"):
-                await conn.execute(text(f"TRUNCATE TABLE {t} CASCADE"))
+        from app.store.sql import AgentRow, ChannelRow, HumanRow, MemberRow
+        sql = await fresh_store(url)   # 테스트 DB 인지 확인 후 비운다
         async with sql.session() as s, s.begin():
             s.add(ChannelRow(id="c1", workspace_id=WS, name="결제-이슈"))
             s.add(HumanRow(id="h1", workspace_id=WS, name="석"))
@@ -169,7 +165,7 @@ async def run() -> int:
         f += await scenario(sql, "c1", "SqlStore (Postgres)")
         await sql.engine.dispose()
     else:
-        print("\n(DATABASE_URL 없음 — SqlStore 시나리오 건너뜀)")
+        print("\n(테스트 DB 미지정 — SqlStore 시나리오 건너뜀)")
     return f
 
 

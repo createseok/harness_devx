@@ -95,6 +95,28 @@ PYTHONPATH=. python3 scripts/probe_corp.py
 ReAct 형식 준수력. 4번 결과에 따라 `CORP_AI_NATIVE_TOOLS` 를 정한다.
 **모르면 false로 두면 된다** — ReAct 폴백이 어떤 모델에서도 동작한다.
 
+## 웹 UI
+
+서버를 띄우고 http://127.0.0.1:8765 를 연다. 빌드 단계 없는 단일 HTML
+(`app/api/static/index.html`) 이라 CDN 없이 오프라인에서도 뜬다.
+
+```
+┌────────┬─────────────────────────────┬──────────────┐
+│ 채널   │  #결제-이슈                  │  할 일    0  │
+│ 멤버   │  🧑 석: @기획자 …            │  진행 중  4  │
+│  석    │    🤖 기획자: [태스크] …      │  검토 요청 1 │
+│  기획자 │      🤖 데이터분석가: …       │  완료     0  │
+│  분석가 │  ⋯ 기획자 작업 중            │              │
+└────────┴─────────────────────────────┴──────────────┘
+```
+
+- 왼쪽: 채널 목록 + 멤버 (사람/에이전트, `@멘션`·`전체` reply mode 표시)
+- 가운데: 메시지 타임라인. **홉 깊이만큼 들여쓰기**, 스레드는 왼쪽 선으로 구분
+- 오른쪽: 칸반 보드. 메시지가 올 때마다 자동 갱신
+- 하단 `⋯ 기획자 작업 중` — `claude -p` 는 호출당 1~2분이라 이 표시가 없으면
+  멈춘 것인지 도는 것인지 알 수 없다 (`/activity` 를 2.5초마다 폴링)
+- SSE 로 에이전트 발화가 실시간으로 흘러들어온다
+
 ## 서버 기동
 
 Python 3.13 기준 (3.11+ 필요).
@@ -122,15 +144,23 @@ LLM_PROVIDER=claude_cli PYTHONPATH=. \
 테이블 7개는 기동 시 자동 생성된다. 검증:
 
 ```bash
-DATABASE_URL="postgresql+asyncpg://genteam:genteam@127.0.0.1/genteam" \
-  PYTHONPATH=. .venv/bin/python tests/test_sql_store.py
+createdb genteam_test   # 테스트 전용 DB — 테스트는 TRUNCATE 를 한다
+./scripts/check.sh
 ```
+
+> 테스트는 테이블을 TRUNCATE 하므로 **이름이 `_test` 로 끝나는 DB 만** 받는다.
+> 개발 DB 를 지정하면 실행을 거부한다 (`tests/_dbutil.py`). 실제로 한 번
+> 개발 데이터를 날린 뒤에 넣은 장치다.
 
 ### 엔드포인트
 
 | Method | Path | 용도 |
 |---|---|---|
+| GET | `/` | 웹 UI |
 | GET | `/healthz` | provider·모델·tool calling 지원 여부 |
+| GET | `/api/channels` | 채널 목록 |
+| GET | `/api/agents` | 에이전트 목록 |
+| GET | `/api/channels/{id}/activity` | 지금 작업 중인 에이전트 |
 | POST | `/api/humans` | 사람 생성 |
 | POST | `/api/agents` | 에이전트 생성 (name = @멘션 핸들) |
 | POST | `/api/channels` | 채널 생성 |
