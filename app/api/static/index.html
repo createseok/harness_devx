@@ -28,8 +28,14 @@ body {
   font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo",
         "Noto Sans KR", "Segoe UI", sans-serif;
   background: var(--bg); color: var(--text);
-  display: grid; grid-template-columns: 232px 1fr 320px; height: 100vh; overflow: hidden;
+  display: grid; grid-template-columns: 232px minmax(0, 1fr) 320px;
+  /* dvh: 모바일 브라우저 주소창이 접힐 때 100vh 가 틀리는 문제를 피한다 */
+  height: 100dvh; max-height: 100dvh; overflow: hidden;
 }
+/* ★ grid/flex 아이템은 기본 min-height 가 auto 라 내용만큼 늘어난다.
+   이걸 0 으로 내려야 자식(#feed)이 넘칠 때 부모가 커지는 대신 자식이 스크롤한다.
+   빠뜨리면 메시지가 쌓일수록 입력창이 화면 밖으로 밀려난다. */
+aside, .board, main { min-height: 0; }
 aside, .board { background: var(--panel); overflow-y: auto; }
 aside { border-right: 1px solid var(--border); }
 .board { border-left: 1px solid var(--border); }
@@ -49,7 +55,7 @@ main { display: flex; flex-direction: column; min-width: 0; }
 .tag { font-size: 10px; color: var(--faint); border: 1px solid var(--border);
        border-radius: 4px; padding: 0 4px; flex: none; }
 
-header { display: flex; align-items: center; gap: 10px; padding: 12px 20px;
+header { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 20px;
          border-bottom: 1px solid var(--border); background: var(--panel); }
 header h1 { font-size: 15px; font-weight: 700; }
 header .topic { color: var(--muted); font-size: 12px; flex: 1;
@@ -60,7 +66,8 @@ header .topic { color: var(--muted); font-size: 12px; flex: 1;
 .live.off i { background: var(--faint); animation: none; }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
 
-#feed { flex: 1; overflow-y: auto; padding: 18px 20px 8px; scroll-behavior: smooth; }
+#feed { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+        padding: 18px 20px 8px; scroll-behavior: smooth; }
 .msg { display: flex; gap: 10px; padding: 7px 0; }
 .msg .av { width: 30px; height: 30px; border-radius: 8px; flex: none; display: grid;
            place-items: center; font-size: 12px; font-weight: 700; color: #fff; }
@@ -75,7 +82,7 @@ header .topic { color: var(--muted); font-size: 12px; flex: 1;
 .msg.thr .av { width: 22px; height: 22px; font-size: 10px; border-radius: 6px; }
 .hint { color: var(--faint); font-size: 12px; padding: 4px 0 4px 40px; }
 
-#working { padding: 0 20px 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+#working { flex: none; padding: 0 20px 6px; display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { display: flex; align-items: center; gap: 6px; font-size: 12px;
         background: var(--panel-2); border: 1px solid var(--border);
         border-radius: 99px; padding: 3px 10px; color: var(--muted); }
@@ -86,8 +93,8 @@ header .topic { color: var(--muted); font-size: 12px; flex: 1;
 .chip .d s:nth-child(3) { animation-delay: .3s }
 @keyframes bounce { 0%,60%,100% { opacity: .25 } 30% { opacity: 1 } }
 
-form { display: flex; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--border);
-       background: var(--panel); }
+form { flex: none; display: flex; gap: 8px; padding: 12px 20px 16px;
+       border-top: 1px solid var(--border); background: var(--panel); }
 textarea { flex: 1; resize: none; font: inherit; color: var(--text);
            background: var(--panel-2); border: 1px solid var(--border);
            border-radius: 10px; padding: 9px 12px; min-height: 42px; max-height: 140px; }
@@ -106,8 +113,18 @@ button:disabled { opacity: .45; cursor: default; }
 .card .t { font-size: 13px; line-height: 1.45; margin-bottom: 5px; }
 .card .m { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
 .empty { color: var(--faint); font-size: 12px; padding: 2px 0 6px; }
-.err { margin: 10px 20px; padding: 9px 12px; border-radius: 8px; font-size: 12px;
+.err { flex: none; margin: 10px 20px; padding: 9px 12px; border-radius: 8px; font-size: 12px;
        background: #fee; color: #a33; border: 1px solid #fbb; }
+
+/* 좁은 창(브라우저 패널 등)에서는 보드와 사이드바를 접는다 */
+@media (max-width: 1100px) {
+  body { grid-template-columns: 200px minmax(0, 1fr); }
+  .board { display: none; }
+}
+@media (max-width: 720px) {
+  body { grid-template-columns: minmax(0, 1fr); }
+  aside { display: none; }
+}
 @media (prefers-color-scheme: dark) { .err { background: #3a1f22; color: #f9a; border-color: #5a2f33; } }
 </style>
 </head>
