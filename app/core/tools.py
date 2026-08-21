@@ -213,6 +213,26 @@ async def search_channel_history(ctx: ToolContext, query: str, limit: int = 5) -
 
 
 @registry.register(
+    "fetch_url",
+    "웹 페이지를 읽는다. 사람이 준 링크나 공개 문서를 확인할 때 쓴다. "
+    "본문 텍스트만 돌려주므로 표나 이미지는 손실될 수 있다.",
+    {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "http(s) 주소"},
+            "max_chars": {"type": "integer", "default": 4000,
+                          "description": "돌려받을 최대 글자 수"},
+        },
+        "required": ["url"],
+    },
+)
+async def fetch_url(ctx: ToolContext, url: str, max_chars: int = 4000) -> str:
+    from app.core.web import fetch_text
+    ok, text = await fetch_text(url, max_chars=int(max_chars or 4000))
+    return text if ok else f"오류: {text}"
+
+
+@registry.register(
     "finish",
     "이번 턴에서 할 일을 모두 마쳤을 때 호출한다. 반드시 마지막에 호출해야 한다.",
     {

@@ -47,6 +47,8 @@ def _claude_cli(s) -> LLMProvider:
         timeout=s.claude_cli_timeout,
         max_budget_usd=s.claude_cli_max_budget_usd,
         extra_args=[a for a in (s.claude_cli_extra_args or "").split() if a],
+        builtin_tools=s.claude_cli_tools,
+        max_turns=s.claude_cli_max_turns,
     )
 
 

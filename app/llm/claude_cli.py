@@ -8,14 +8,19 @@
   - 시스템 프롬프트는 --system-prompt 로 **전체 교체** 한다
     (--append-system-prompt 는 Claude Code의 코딩 에이전트 페르소나가
      남아서 우리 역할 프롬프트와 충돌한다)
-  - --tools "" 로 Claude Code 자체 툴(Read/Bash/Edit)을 끈다.
-    우리는 순수 텍스트 완성만 필요하고, 툴은 ReAct 레이어가 처리한다
-  - --max-turns 1 로 CLI가 자체 에이전트 루프를 돌지 않게 한다
+  - --tools 로 Claude Code 내장 툴을 **읽기 전용으로만** 연다.
+    기본값은 WebSearch,WebFetch — 에이전트에게 조사 능력을 주기 위해서다.
+    이걸 ""로 막아두면 리서처가 "웹 접근 도구가 없다"며 아무것도 못 한다.
+    ★ Bash/Write/Edit 은 절대 넣지 말 것 — 호스트 셸을 여는 것과 같다.
+  - --max-turns 는 CLI가 검색→읽기→답변까지 갈 수 있을 만큼만 준다.
+    1이면 검색 결과를 받아보지도 못하고 턴이 끝난다.
 
 한계:
   - temperature 제어 불가 (CLI가 노출하지 않음)
   - 호출마다 프로세스를 띄우므로 API 대비 느리고 무겁다
   - 네이티브 tool calling을 구조화된 형태로 받을 수 없다 → ReAct 폴백 사용
+  - 내장 툴은 **이 provider 전용**이다. 사내 AI로 갈아타면 사라진다.
+    provider 무관하게 남는 능력은 우리 레지스트리의 fetch_url 이다.
 """
 from __future__ import annotations
 
@@ -55,6 +60,29 @@ def _is_fatal(text: str) -> bool:
     return any(sign in low for sign in _FATAL_SIGNS)
 
 
+#: 호스트에 쓰기·실행 권한을 주는 툴. 절대 열지 않는다.
+#: 에이전트가 만든 텍스트가 곧 셸 명령이 되는 구조라 프롬프트 인젝션에 그대로 노출된다.
+_FORBIDDEN_TOOLS = {
+    "bash", "write", "edit", "multiedit", "notebookedit",
+    "task", "agent", "killshell", "bashoutput",
+}
+
+
+def _safe_tools(spec: str) -> str:
+    """설정에서 위험한 내장 툴을 걸러낸다."""
+    if not spec or not spec.strip():
+        return ""
+    keep, dropped = [], []
+    for name in (t.strip() for t in spec.split(",")):
+        if not name:
+            continue
+        (dropped if name.lower() in _FORBIDDEN_TOOLS else keep).append(name)
+    if dropped:
+        log.warning("내장 툴 %s 은(는) 호스트 쓰기·실행 권한을 주므로 제외했습니다. "
+                    "정말 필요하면 코드에서 _FORBIDDEN_TOOLS 를 조정하세요.", dropped)
+    return ",".join(keep)
+
+
 _INSTALL_HINT = (
     "`claude` CLI를 찾을 수 없습니다.\n"
     "  설치:  npm install -g @anthropic-ai/claude-code\n"
@@ -78,6 +106,8 @@ class ClaudeCliProvider(LLMProvider):
         max_budget_usd: Optional[float] = None,
         extra_args: Optional[List[str]] = None,
         cwd: Optional[str] = None,
+        builtin_tools: str = "WebSearch",
+        max_turns: int = 6,
     ) -> None:
         self.cli_path = cli_path
         self.default_model = default_model
@@ -86,6 +116,8 @@ class ClaudeCliProvider(LLMProvider):
         self.max_budget_usd = max_budget_usd
         self.extra_args = extra_args or []
         self.cwd = cwd
+        self.builtin_tools = _safe_tools(builtin_tools)
+        self.max_turns = max_turns
         self.total_cost_usd = 0.0
         self._resolved: Optional[str] = None
 
@@ -123,12 +155,16 @@ class ClaudeCliProvider(LLMProvider):
             "-p",
             "--output-format", "json",
             "--model", model,
-            # Claude Code 자체 툴을 완전히 끈다 — 우리는 텍스트 완성만 필요하다
-            "--tools", "",
-            # CLI가 자체 에이전트 루프를 돌면 우리 런타임과 이중 루프가 된다
-            "--max-turns", "1",
+            # --tools 는 "무엇이 존재하는가", --allowed-tools 는 "무엇이 승인 없이
+            # 실행되는가"를 정한다. 둘 다 줘야 실제로 쓴다. 하나만 주면
+            # 에이전트가 "도구 권한이 막혀 있다"고 답하고 끝난다.
+            "--tools", self.builtin_tools,
+            # 검색→읽기→답변까지 갈 수 있을 만큼만. 무한 루프는 우리 가드가 막는다
+            "--max-turns", str(self.max_turns),
             "--no-session-persistence",
         ]
+        if self.builtin_tools:
+            argv += ["--allowed-tools", self.builtin_tools]
         if system and len(system) <= _ARGV_SYSTEM_LIMIT:
             argv += ["--system-prompt", system]
         if self.max_budget_usd:

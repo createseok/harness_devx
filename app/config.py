@@ -28,6 +28,12 @@ class Settings:
     claude_cli_timeout: float = float(os.getenv("CLAUDE_CLI_TIMEOUT", "180"))
     claude_cli_max_budget_usd: float = float(os.getenv("CLAUDE_CLI_MAX_BUDGET_USD", "0") or 0)
     claude_cli_extra_args: str = os.getenv("CLAUDE_CLI_EXTRA_ARGS", "")
+    #: Claude Code 내장 툴. 읽기 전용만 열 것 (Bash/Write/Edit 은 코드에서 차단됨).
+    #: WebFetch 는 일부러 뺐다 — 우리 fetch_url 이 SSRF 가드와 툴 로그를 갖고 있고
+    #: provider 를 갈아타도 남는다. 내장 WebFetch 를 열어두면 에이전트가 그쪽을
+    #: 쓰면서 관측·방어를 통째로 우회한다 (실측으로 확인).
+    claude_cli_tools: str = os.getenv("CLAUDE_CLI_TOOLS", "WebSearch")
+    claude_cli_max_turns: int = _int("CLAUDE_CLI_MAX_TURNS", 6)
 
     # --- Anthropic API ---
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
