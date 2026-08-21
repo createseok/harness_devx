@@ -5,8 +5,8 @@ import asyncio
 from typing import Dict, List, Optional, Set
 
 from app.core.models import (
-    Agent, AgentRun, Channel, ChannelMember, Human, MemberType, Message,
-    MessageKind, RunStatus, Task, TaskStatus,
+    Agent, AgentRun, Channel, ChannelMember, ChannelSummary, Human, MemberType,
+    Message, MessageKind, RunStatus, Task, TaskStatus,
 )
 from app.store.base import Store
 
@@ -22,6 +22,7 @@ class InMemoryStore(Store):
         self.runs: Dict[str, AgentRun] = {}
         self._claimed: Set[str] = set()
         self.tasks: Dict[str, Task] = {}
+        self.summaries: Dict[str, ChannelSummary] = {}
         self._lock = asyncio.Lock()
 
     # --- 시드 헬퍼 ---
@@ -66,6 +67,26 @@ class InMemoryStore(Store):
                if m.thread_id == thread_id or m.id == thread_id]
         out.sort(key=lambda m: m.created_at)
         return out[-limit:]
+
+    async def messages_after(self, channel_id: str, after_ts: Optional[float],
+                             limit: int = 200) -> List[Message]:
+        out = [self.messages[i] for i in self.channel_index.get(channel_id, [])]
+        out = [m for m in out if m.kind == MessageKind.CHAT
+               and (after_ts is None or m.created_at > after_ts)]
+        return out[:limit]
+
+    async def count_messages_after(self, channel_id: str,
+                                   after_ts: Optional[float]) -> int:
+        return sum(1 for i in self.channel_index.get(channel_id, [])
+                   if self.messages[i].kind == MessageKind.CHAT
+                   and (after_ts is None or self.messages[i].created_at > after_ts))
+
+    async def get_summary(self, channel_id: str) -> Optional[ChannelSummary]:
+        return self.summaries.get(channel_id)
+
+    async def save_summary(self, summary: ChannelSummary) -> ChannelSummary:
+        self.summaries[summary.channel_id] = summary
+        return summary
 
     async def search_messages(self, channel_id: str, query: str, limit: int = 10) -> List[Message]:
         # 프로덕션에서는 BM25 + pgvector 하이브리드. 여기서는 단순 토큰 매칭.

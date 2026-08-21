@@ -11,8 +11,8 @@ import abc
 from typing import List, Optional
 
 from app.core.models import (
-    Agent, AgentRun, Channel, ChannelMember, Human, MemberType, Message, Task,
-    TaskStatus,
+    Agent, AgentRun, Channel, ChannelMember, ChannelSummary, Human, MemberType,
+    Message, Task, TaskStatus,
 )
 
 
@@ -34,6 +34,22 @@ class Store(abc.ABC):
 
     @abc.abstractmethod
     async def search_messages(self, channel_id: str, query: str, limit: int = 10) -> List[Message]: ...
+
+    @abc.abstractmethod
+    async def messages_after(self, channel_id: str, after_ts: Optional[float],
+                             limit: int = 200) -> List[Message]:
+        """특정 시각 이후의 메시지. 증분 요약이 쓴다."""
+
+    @abc.abstractmethod
+    async def count_messages_after(self, channel_id: str,
+                                   after_ts: Optional[float]) -> int: ...
+
+    # --- 요약 (Phase 4) ---
+    @abc.abstractmethod
+    async def get_summary(self, channel_id: str) -> Optional[ChannelSummary]: ...
+
+    @abc.abstractmethod
+    async def save_summary(self, summary: ChannelSummary) -> ChannelSummary: ...
 
     # --- 멤버 ---
     @abc.abstractmethod

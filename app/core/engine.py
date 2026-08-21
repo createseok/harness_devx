@@ -18,6 +18,7 @@ from app.core.guards import TraceBudget, TurnGate
 from app.core.models import Channel, Message, MessageKind, new_id
 from app.core.router import Router
 from app.core.runtime import AgentRuntime, TurnResult
+from app.core.summarizer import Summarizer
 from app.core.tools import ToolRegistry
 from app.llm.base import LLMProvider
 from app.store.base import Store
@@ -59,6 +60,8 @@ class Engine:
         self.gate = gate or TurnGate()
         self.router = Router(store, self.gate)
         self.runtime = AgentRuntime(store, provider, registry)
+        self.summarizer = Summarizer(store, provider)
+        self._summary_tasks: List[asyncio.Task] = []
         self._queue: "asyncio.Queue[Optional[Job]]" = asyncio.Queue()
         self._locks: Dict[str, asyncio.Lock] = {}
         self._sem = asyncio.Semaphore(max_concurrency)
@@ -86,10 +89,14 @@ class Engine:
             await w
         self._workers = []
 
-    async def wait_idle(self) -> None:
+    async def wait_idle(self, *, include_summaries: bool = True) -> None:
         """큐가 비고 실행 중인 턴도 없을 때까지 기다린다 (데모/테스트용)."""
         await self._queue.join()
         await self._idle.wait()
+        if include_summaries:
+            pending = [t for t in self._summary_tasks if not t.done()]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
     # --- 입력 ---
     async def submit(self, message: Message, budget: Optional[TraceBudget] = None) -> None:
@@ -155,6 +162,17 @@ class Engine:
                     self._idle.set()
                 self._queue.task_done()
 
+    def _spawn_summary(self, channel_id: str) -> None:
+        self._summary_tasks = [t for t in self._summary_tasks if not t.done()]
+        self._summary_tasks.append(
+            asyncio.ensure_future(self._summarize_quietly(channel_id)))
+
+    async def _summarize_quietly(self, channel_id: str) -> None:
+        try:
+            await self.summarizer.maybe_update(channel_id)
+        except Exception:
+            log.exception("채널 %s 요약 중 예외", channel_id)
+
     def _lock_for(self, agent_id: str, channel_id: str) -> asyncio.Lock:
         # (에이전트, 채널) 당 동시 실행 1개.
         # 이게 없으면 에이전트가 자기 말에 자기가 답하거나 두 턴이 뒤엉킨다.
@@ -179,6 +197,9 @@ class Engine:
 
         self.stats.turns += 1
         self.stats.tokens += result.run.prompt_tokens + result.run.completion_tokens
+
+        # 요약은 에이전트 턴을 막으면 안 된다 → 백그라운드로 뺀다
+        self._spawn_summary(job.channel_id)
         for w in result.warnings:
             log.info("[%s] %s", agent.name, w)
 

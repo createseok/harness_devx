@@ -123,6 +123,26 @@ class Task:
 
 
 @dataclass
+class ChannelSummary:
+    """채널의 롤링 요약.
+
+    최근 N개만 원문으로 넣고 그 이전은 이 요약으로 대체한다.
+    증분 생성이 핵심 — 매번 전체를 다시 읽으면 요약 비용이 채널 길이에
+    비례해 커져서 애초 문제를 해결하지 못한다.
+    """
+
+    id: str
+    channel_id: str
+    text: str
+    #: 이 메시지까지 요약에 포함됐다 (다음 증분의 시작점)
+    up_to_message_id: str
+    up_to_created_at: float
+    #: 요약이 대체하는 원본 메시지 수 (관측용)
+    covered_count: int = 0
+    created_at: float = field(default_factory=now_ts)
+
+
+@dataclass
 class AgentRun:
     """에이전트 한 턴의 실행 기록. 멱등성 키이자 관측/과금 단위."""
 

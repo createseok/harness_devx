@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from sqlalchemy import (
     Boolean, Float, ForeignKey, Index, Integer, String, Text,
-    UniqueConstraint, func, or_, select,
+    UniqueConstraint, case, func, literal, or_, select,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -86,6 +86,19 @@ class MessageRow(Base):
     caused_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[float] = mapped_column(Float, default=dm.now_ts, index=True)
     __table_args__ = (Index("ix_msg_channel_time", "channel_id", "created_at"),)
+
+
+class SummaryRow(Base):
+    __tablename__ = "channel_summaries"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(64), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    up_to_message_id: Mapped[str] = mapped_column(String(64))
+    up_to_created_at: Mapped[float] = mapped_column(Float)
+    covered_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[float] = mapped_column(Float, default=dm.now_ts, index=True)
+    # 채널당 여러 세대를 남긴다 — 요약이 잘못 생성됐을 때 이전 세대로 돌아갈 수 있다
+    __table_args__ = (Index("ix_summary_channel_time", "channel_id", "created_at"),)
 
 
 class RunRow(Base):
@@ -192,15 +205,72 @@ class SqlStore(Store):
             return [_msg(r) for r in (await s.execute(q)).scalars().all()]
 
     async def search_messages(self, channel_id: str, query: str, limit: int = 10):
-        # TODO(Phase 4): to_tsvector 전문검색 + pgvector 임베딩 하이브리드로 교체.
-        # 지금은 ILIKE — 소규모 채널에서는 충분하다.
+        """토큰별로 쪼개서 일치 개수로 점수를 매긴다.
+
+        통짜 ILIKE '%결제 실패율%' 는 그 어절이 통째로 붙어 있어야만 맞는다.
+        실제 질의는 대개 여러 단어이고 문서에는 흩어져 있으므로 거의 못 찾는다.
+
+        한국어 형태소 분석기가 없는 Postgres 기본 설정에서는 to_tsvector 도
+        실효가 없다. 토큰 단위 ILIKE 스코어링이 현실적인 절충이다.
+        pgvector 로 갈 때는 이 메서드만 교체하면 된다 (인터페이스 그대로).
+        """
+        terms = [t for t in (query or "").split() if len(t) >= 2][:8]
+        if not terms:
+            return []
         async with self.session() as s:
-            q = (select(MessageRow)
+            score = sum(
+                (case((MessageRow.text.ilike(f"%{t}%"), 1), else_=0) for t in terms),
+                literal(0),
+            ).label("score")
+            q = (select(MessageRow, score)
                  .where(MessageRow.channel_id == channel_id,
                         MessageRow.kind == dm.MessageKind.CHAT.value,
-                        MessageRow.text.ilike(f"%{query}%"))
-                 .order_by(MessageRow.created_at.desc()).limit(limit))
+                        or_(*[MessageRow.text.ilike(f"%{t}%") for t in terms]))
+                 .order_by(score.desc(), MessageRow.created_at.desc())
+                 .limit(limit))
+            return [_msg(row[0]) for row in (await s.execute(q)).all()]
+
+    async def messages_after(self, channel_id: str, after_ts, limit: int = 200):
+        async with self.session() as s:
+            q = select(MessageRow).where(
+                MessageRow.channel_id == channel_id,
+                MessageRow.kind == dm.MessageKind.CHAT.value)
+            if after_ts is not None:
+                q = q.where(MessageRow.created_at > after_ts)
+            q = q.order_by(MessageRow.created_at).limit(limit)
             return [_msg(r) for r in (await s.execute(q)).scalars().all()]
+
+    async def count_messages_after(self, channel_id: str, after_ts) -> int:
+        async with self.session() as s:
+            q = select(func.count(MessageRow.id)).where(
+                MessageRow.channel_id == channel_id,
+                MessageRow.kind == dm.MessageKind.CHAT.value)
+            if after_ts is not None:
+                q = q.where(MessageRow.created_at > after_ts)
+            return int((await s.execute(q)).scalar() or 0)
+
+    # --- 요약 ---
+    async def get_summary(self, channel_id: str):
+        async with self.session() as s:
+            q = (select(SummaryRow).where(SummaryRow.channel_id == channel_id)
+                 .order_by(SummaryRow.created_at.desc()).limit(1))
+            r = (await s.execute(q)).scalars().first()
+            if r is None:
+                return None
+            return dm.ChannelSummary(
+                id=r.id, channel_id=r.channel_id, text=r.text,
+                up_to_message_id=r.up_to_message_id,
+                up_to_created_at=r.up_to_created_at,
+                covered_count=r.covered_count, created_at=r.created_at)
+
+    async def save_summary(self, summary: dm.ChannelSummary):
+        async with self.session() as s, s.begin():
+            s.add(SummaryRow(
+                id=summary.id, channel_id=summary.channel_id, text=summary.text,
+                up_to_message_id=summary.up_to_message_id,
+                up_to_created_at=summary.up_to_created_at,
+                covered_count=summary.covered_count, created_at=summary.created_at))
+        return summary
 
     # --- 멤버 ---
     async def get_agent(self, agent_id: str) -> Optional[dm.Agent]:

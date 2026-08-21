@@ -3,9 +3,12 @@
 에이전트 품질의 8할은 모델이 아니라 여기서 결정된다.
 "채널에 나중에 합류해도 3주 전부터 이어받는다"를 구현하는 곳이기도 하다.
 
-Phase 4에서 확장할 지점:
-  - 채널 롤링 요약 (K개 메시지마다 백그라운드 생성)
-  - 에이전트 장기 메모리 검색 (pgvector 하이브리드)
+컨텍스트는 세 층으로 쌓는다:
+
+    [ 롤링 요약 (오래된 것 전부) ] + [ 최근 N개 원문 ] + [ 태스크 보드 ]
+
+요약이 있으면 최근 N개만 원문으로 넣으므로 채널이 아무리 길어져도
+프롬프트 크기가 유계로 유지된다. 요약 생성은 summarizer.py 가 맡는다.
 """
 from __future__ import annotations
 
@@ -14,8 +17,10 @@ from typing import List, Optional
 from app.core.models import (
     Agent, Channel, MemberType, Message, MessageKind, Task, TaskStatus,
 )
+from app.core.summarizer import RECENT_WINDOW
 from app.store.base import Store
 
+#: 요약이 **없을 때** 넣을 최대 개수 (요약이 생기기 전 초기 구간)
 MAX_HISTORY = 30
 MAX_TEXT = 1200
 
@@ -78,8 +83,17 @@ async def build_context_block(
             if h:
                 roster.append(f"  - {h.name} (사람)")
 
-    history = await store.recent_messages(channel.id, limit=history_limit)
+    # 요약이 있으면 최근 N개만 원문으로 — 이게 컨텍스트를 유계로 만든다
+    summary = await store.get_summary(channel.id)
+    window = RECENT_WINDOW if summary else history_limit
+    history = await store.recent_messages(channel.id, limit=window)
     task_block = await _task_board(store, agent, channel.id)
+
+    summary_block = ""
+    if summary:
+        summary_block = (
+            f"\n## 이전 대화 요약 ({summary.covered_count}건 압축)\n{summary.text}"
+        )
 
     # 스레드에서 트리거된 경우 해당 스레드 전문을 따로 붙인다
     thread_block = ""
@@ -95,8 +109,12 @@ async def build_context_block(
         "",
         "## 이 채널의 멤버",
         "\n".join(roster) if roster else "  (없음)",
+    ]
+    if summary_block:
+        lines.append(summary_block)
+    lines += [
         "",
-        "## 최근 대화",
+        f"## 최근 대화 (마지막 {len(history)}건)",
         "\n".join(_fmt(m, highlight_id=trigger.id) for m in history) or "  (없음)",
     ]
     if task_block:

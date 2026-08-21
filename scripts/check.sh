@@ -7,7 +7,7 @@ fail=0
 PY=${PY:-python3}
 [ -x .venv/bin/python ] && PY=.venv/bin/python
 
-for t in tests/test_react.py tests/test_guards.py tests/test_router.py tests/test_registry.py tests/test_tasks.py tests/test_silent_turn.py \
+for t in tests/test_react.py tests/test_guards.py tests/test_router.py tests/test_registry.py tests/test_tasks.py tests/test_silent_turn.py tests/test_memory.py \
          scripts/demo.py scripts/demo_runaway.py; do
   echo ""
   echo "═══ $t ═══"
