@@ -5,8 +5,8 @@ import asyncio
 from typing import Dict, List, Optional, Set
 
 from app.core.models import (
-    Agent, AgentRun, Channel, ChannelMember, ChannelSummary, Human, MemberType,
-    Message, MessageKind, RunStatus, Task, TaskStatus,
+    Agent, AgentRun, Channel, ChannelMember, ChannelSummary, FileRecord, Human,
+    MemberType, Message, MessageKind, RunStatus, Task, TaskStatus,
 )
 from app.store.base import Store
 
@@ -23,6 +23,7 @@ class InMemoryStore(Store):
         self._claimed: Set[str] = set()
         self.tasks: Dict[str, Task] = {}
         self.summaries: Dict[str, ChannelSummary] = {}
+        self.files: Dict[str, FileRecord] = {}
         self._lock = asyncio.Lock()
 
     # --- 시드 헬퍼 ---
@@ -166,6 +167,8 @@ class InMemoryStore(Store):
             self.messages.pop(mid, None)
         self.members.pop(channel_id, None)
         self.summaries.pop(channel_id, None)
+        for fid in [k for k, v in self.files.items() if v.channel_id == channel_id]:
+            del self.files[fid]
         for tid in [k for k, v in self.tasks.items() if v.channel_id == channel_id]:
             del self.tasks[tid]
         for rid in [k for k, v in self.runs.items() if v.channel_id == channel_id]:
@@ -215,6 +218,18 @@ class InMemoryStore(Store):
             for r in self.runs.values()
             if r.trace_id == trace_id
         )
+
+    # --- 파일 ---
+    async def add_file(self, record: FileRecord) -> FileRecord:
+        self.files[record.id] = record
+        return record
+
+    async def get_file(self, file_id: str) -> Optional[FileRecord]:
+        return self.files.get(file_id)
+
+    async def list_files(self, channel_id: str) -> List[FileRecord]:
+        return sorted((f for f in self.files.values() if f.channel_id == channel_id),
+                      key=lambda f: f.created_at)
 
     # --- 태스크 ---
     async def add_task(self, task: Task) -> Task:

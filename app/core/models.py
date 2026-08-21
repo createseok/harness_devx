@@ -123,6 +123,34 @@ class Task:
 
 
 @dataclass
+class FileRecord:
+    """채널에 올라온 파일.
+
+    실제 바이트는 파일시스템에 file_id 이름으로 저장한다. 사용자가 준
+    파일명을 경로로 쓰지 않는다 — '../../etc/passwd' 같은 이름이 그대로
+    경로가 되면 끝이다.
+    """
+
+    id: str
+    channel_id: str
+    name: str                      # 원본 파일명 (표시용)
+    size: int
+    content_type: str
+    uploader_type: MemberType = MemberType.HUMAN
+    uploader_id: str = ""
+    uploader_name: str = ""
+    #: 이 파일을 알린 채널 메시지
+    message_id: Optional[str] = None
+    created_at: float = field(default_factory=now_ts)
+
+    @property
+    def is_text(self) -> bool:
+        ct = (self.content_type or "").lower()
+        return (ct.startswith("text/") or "json" in ct or "csv" in ct
+                or "xml" in ct or "yaml" in ct or ct in ("", "application/octet-stream"))
+
+
+@dataclass
 class ChannelSummary:
     """채널의 롤링 요약.
 

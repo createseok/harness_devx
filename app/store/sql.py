@@ -101,6 +101,20 @@ class SummaryRow(Base):
     __table_args__ = (Index("ix_summary_channel_time", "channel_id", "created_at"),)
 
 
+class FileRow(Base):
+    __tablename__ = "files"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(512))
+    size: Mapped[int] = mapped_column(Integer)
+    content_type: Mapped[str] = mapped_column(String(128), default="")
+    uploader_type: Mapped[str] = mapped_column(String(16), default="human")
+    uploader_id: Mapped[str] = mapped_column(String(64), default="")
+    uploader_name: Mapped[str] = mapped_column(String(64), default="")
+    message_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=dm.now_ts, index=True)
+
+
 class RunRow(Base):
     __tablename__ = "agent_runs"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -142,6 +156,14 @@ def _msg(r: MessageRow) -> dm.Message:
         kind=dm.MessageKind(r.kind), thread_id=r.thread_id, trace_id=r.trace_id,
         depth=r.depth, caused_by=r.caused_by, created_at=r.created_at,
     )
+
+
+def _file(r: "FileRow") -> dm.FileRecord:
+    return dm.FileRecord(
+        id=r.id, channel_id=r.channel_id, name=r.name, size=r.size,
+        content_type=r.content_type, uploader_type=dm.MemberType(r.uploader_type),
+        uploader_id=r.uploader_id, uploader_name=r.uploader_name,
+        message_id=r.message_id, created_at=r.created_at)
 
 
 def _task(r: "TaskRow") -> dm.Task:
@@ -366,7 +388,7 @@ class SqlStore(Store):
         async with self.session() as s, s.begin():
             if await s.get(ChannelRow, channel_id) is None:
                 return False
-            for table in (MemberRow, MessageRow, TaskRow, SummaryRow, RunRow):
+            for table in (MemberRow, MessageRow, TaskRow, SummaryRow, RunRow, FileRow):
                 await s.execute(delete(table).where(table.channel_id == channel_id))
             await s.execute(delete(ChannelRow).where(ChannelRow.id == channel_id))
             return True
@@ -443,6 +465,28 @@ class SqlStore(Store):
                 func.coalesce(func.sum(RunRow.prompt_tokens + RunRow.completion_tokens), 0)
             ).where(RunRow.trace_id == trace_id)
             return int((await s.execute(q)).scalar() or 0)
+
+    # --- 파일 ---
+    async def add_file(self, record: dm.FileRecord):
+        async with self.session() as s, s.begin():
+            s.add(FileRow(
+                id=record.id, channel_id=record.channel_id, name=record.name,
+                size=record.size, content_type=record.content_type,
+                uploader_type=record.uploader_type.value,
+                uploader_id=record.uploader_id, uploader_name=record.uploader_name,
+                message_id=record.message_id, created_at=record.created_at))
+        return record
+
+    async def get_file(self, file_id: str):
+        async with self.session() as s:
+            r = await s.get(FileRow, file_id)
+            return _file(r) if r else None
+
+    async def list_files(self, channel_id: str):
+        async with self.session() as s:
+            q = (select(FileRow).where(FileRow.channel_id == channel_id)
+                 .order_by(FileRow.created_at))
+            return [_file(r) for r in (await s.execute(q)).scalars().all()]
 
     # --- 태스크 ---
     async def add_task(self, task: dm.Task) -> dm.Task:

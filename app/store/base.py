@@ -11,8 +11,8 @@ import abc
 from typing import List, Optional
 
 from app.core.models import (
-    Agent, AgentRun, Channel, ChannelMember, ChannelSummary, Human, MemberType,
-    Message, Task, TaskStatus,
+    Agent, AgentRun, Channel, ChannelMember, ChannelSummary, FileRecord, Human,
+    MemberType, Message, Task, TaskStatus,
 )
 
 
@@ -123,6 +123,16 @@ class Store(abc.ABC):
     @abc.abstractmethod
     async def trace_usage(self, trace_id: str) -> int:
         """해당 trace에서 지금까지 쓴 총 토큰. 예산 가드가 사용한다."""
+
+    # --- 파일 ---
+    @abc.abstractmethod
+    async def add_file(self, record: FileRecord) -> FileRecord: ...
+
+    @abc.abstractmethod
+    async def get_file(self, file_id: str) -> Optional[FileRecord]: ...
+
+    @abc.abstractmethod
+    async def list_files(self, channel_id: str) -> List[FileRecord]: ...
 
     # --- 태스크 (Phase 3) ---
     @abc.abstractmethod

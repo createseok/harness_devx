@@ -119,6 +119,26 @@ form { flex: none; position: relative; display: flex; gap: 8px; padding: 12px 20
 #mention .opt mark { background: none; color: var(--accent); font-weight: 700; }
 #mention .tip { padding: 5px 10px 3px; font-size: 11px; color: var(--faint);
                 border-top: 1px solid var(--border); margin-top: 4px; }
+#attach { flex: none; background: none; color: var(--muted); font-size: 18px;
+          padding: 0 8px; border-radius: 8px; align-self: stretch; }
+#attach:hover { background: var(--panel-2); color: var(--accent); }
+#attach.on { color: var(--accent); }
+#picked { display: none; align-items: center; gap: 8px; font-size: 12px;
+          color: var(--muted); padding: 0 20px 8px; }
+#picked.show { display: flex; }
+#picked b { color: var(--text); font-weight: 600; }
+#picked button { background: none; color: var(--faint); padding: 0 4px; font-size: 14px; }
+.filecard { display: inline-flex; align-items: center; gap: 8px; margin-top: 6px;
+            background: var(--panel-2); border: 1px solid var(--border);
+            border-radius: 8px; padding: 7px 11px; font-size: 12px;
+            text-decoration: none; color: var(--text); }
+.filecard:hover { border-color: var(--accent); }
+.filecard .ic { font-size: 15px; }
+.filecard .mt { color: var(--muted); }
+body.drop::after { content: "여기에 파일을 놓으세요"; position: fixed; inset: 0;
+  z-index: 60; display: grid; place-items: center; font-size: 16px; font-weight: 600;
+  color: var(--accent); background: rgba(61,90,254,.10);
+  border: 3px dashed var(--accent); }
 textarea { flex: 1; resize: none; font: inherit; color: var(--text);
            background: var(--panel-2); border: 1px solid var(--border);
            border-radius: 10px; padding: 9px 12px; min-height: 42px; max-height: 140px; }
@@ -215,8 +235,11 @@ button:disabled { opacity: .45; cursor: default; }
   <div id="err"></div>
   <div id="feed"></div>
   <div id="working"></div>
+  <div id="picked"></div>
   <form id="composer">
     <div id="mention" hidden></div>
+    <input type="file" id="file" hidden>
+    <button type="button" id="attach" title="파일 첨부">📎</button>
     <textarea id="input" placeholder="메시지를 입력하세요.  @이름 으로 에이전트를 부릅니다.  (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
     <button type="submit" id="send">보내기</button>
   </form>
@@ -251,8 +274,22 @@ async function api(path, opts) {
 }
 function fail(msg) { $("#err").innerHTML = `<div class="err">${esc(msg)}</div>`; }
 
+const FILE_RE = /\n?\[파일\] ([^\n·]+?) · ([^\n]*?)\n\(file_id: (fil_[a-z0-9]+)\)/;
+
 function renderText(t) {
-  return esc(t).replace(/@([A-Za-z0-9_\-가-힣]{1,40})/g, '<span class="mention">@$1</span>');
+  // 업로드 알림 메시지는 카드로 바꿔 보여준다 (원문은 에이전트가 읽는 그대로 둔다)
+  let card = "";
+  const hit = t.match(FILE_RE);
+  if (hit) {
+    const [, name, meta, id] = hit;
+    t = t.replace(FILE_RE, "");
+    card = `<a class="filecard" href="/api/files/${id}/download" download>
+      <span class="ic">📄</span><b>${esc(name.trim())}</b>
+      <span class="mt">${esc(meta.trim())}</span></a>`;
+  }
+  const body = esc(t.trim())
+    .replace(/@([A-Za-z0-9_\-가-힣]{1,40})/g, '<span class="mention">@$1</span>');
+  return body + card;
 }
 
 function addMessage(m, animate) {
@@ -793,16 +830,67 @@ $("#input").addEventListener("input", () => { if (!composing()) refreshMention()
 $("#input").addEventListener("click", refreshMention);
 $("#input").addEventListener("blur", () => setTimeout(closeMention, 120));
 
+// ── 파일 첨부 ────────────────────────────────────────────────────────
+let pendingFile = null;
+
+function showPicked() {
+  const el = $("#picked");
+  if (!pendingFile) { el.className = ""; el.innerHTML = ""; $("#attach").className = ""; return; }
+  const kb = pendingFile.size < 1024 * 1024
+    ? (pendingFile.size / 1024).toFixed(0) + "KB"
+    : (pendingFile.size / 1024 / 1024).toFixed(1) + "MB";
+  el.className = "show";
+  el.innerHTML = `📄 <b>${esc(pendingFile.name)}</b> ${kb}
+    <button type="button" id="unpick" title="첨부 취소">×</button>
+    <span style="color:var(--faint)">— 메시지와 함께 전송됩니다</span>`;
+  $("#attach").className = "on";
+  $("#unpick").onclick = () => { pendingFile = null; $("#file").value = ""; showPicked(); };
+}
+
+$("#attach").onclick = () => $("#file").click();
+$("#file").onchange = (e) => { pendingFile = e.target.files[0] || null; showPicked(); $("#input").focus(); };
+
+// 드래그&드롭
+let dragDepth = 0;
+document.addEventListener("dragenter", (e) => {
+  if (![...e.dataTransfer.types].includes("Files")) return;
+  dragDepth++; document.body.classList.add("drop");
+});
+document.addEventListener("dragleave", () => {
+  if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("drop"); }
+});
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove("drop");
+  const f = e.dataTransfer.files[0];
+  if (f) { pendingFile = f; showPicked(); $("#input").focus(); }
+});
+
+async function uploadPending(text) {
+  const fd = new FormData();
+  fd.append("file", pendingFile);
+  fd.append("author_id", human.id);
+  fd.append("author_name", human.name);
+  fd.append("text", text);
+  const r = await fetch(`/api/channels/${channel}/files`, { method: "POST", body: fd });
+  if (!r.ok) throw new Error(await r.text());
+  pendingFile = null; $("#file").value = ""; showPicked();
+}
+
 $("#composer").onsubmit = async (e) => {
   e.preventDefault();
   const text = $("#input").value.trim();
-  if (!text || !channel) return;
+  if ((!text && !pendingFile) || !channel) return;
   $("#send").disabled = true;
   try {
-    await api(`/api/channels/${channel}/messages`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ author_id: human.id, author_name: human.name, text }),
-    });
+    if (pendingFile) {
+      await uploadPending(text);      // 업로드가 알림 메시지까지 만든다
+    } else {
+      await api(`/api/channels/${channel}/messages`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ author_id: human.id, author_name: human.name, text }),
+      });
+    }
     $("#input").value = "";
     closeMention();
     setTimeout(loadActivity, 400);

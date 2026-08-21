@@ -9,3 +9,4 @@ python-dotenv>=1.0
 
 # LLM_PROVIDER=anthropic 일 때만 필요 (claude_cli 는 불필요)
 anthropic>=0.40
+python-multipart>=0.0.9

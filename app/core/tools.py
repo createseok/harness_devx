@@ -212,6 +212,85 @@ async def search_channel_history(ctx: ToolContext, query: str, limit: int = 5) -
     return "\n".join(f"[{h.author_name}] {h.text[:200]}" for h in hits)
 
 
+# --- 파일 ---------------------------------------------------------------
+# 채널에 올라온 파일만 읽을 수 있다. 툴이 channel_id 를 대조하므로 file_id 를
+# 알아내도 다른 채널의 파일에는 접근할 수 없다.
+
+async def _file_in_channel(ctx: ToolContext, file_id: str):
+    rec = await ctx.store.get_file(file_id)
+    if rec is None:
+        return None, f"오류: 파일 {file_id} 가 없습니다. list_files 로 확인하세요."
+    if rec.channel_id != ctx.channel_id:
+        return None, "오류: 이 채널의 파일이 아닙니다."
+    return rec, None
+
+
+@registry.register(
+    "list_files",
+    "이 채널에 올라온 파일 목록을 본다. 데이터가 필요할 때 사람에게 요청하기 전에 먼저 확인한다.",
+    {"type": "object", "properties": {}},
+)
+async def list_files(ctx: ToolContext) -> str:
+    from app.core.files import human_size
+    recs = await ctx.store.list_files(ctx.channel_id)
+    if not recs:
+        return "올라온 파일이 없습니다."
+    return "\n".join(
+        f"- [{r.id}] {r.name} · {human_size(r.size)} · {r.uploader_name} 업로드"
+        for r in recs)
+
+
+@registry.register(
+    "read_file",
+    "파일을 텍스트로 읽는다. 큰 파일은 offset 을 올려가며 이어 읽는다. "
+    "CSV 라면 read_file 보다 describe_table 을 먼저 쓰는 게 낫다.",
+    {
+        "type": "object",
+        "properties": {
+            "file_id": {"type": "string"},
+            "max_chars": {"type": "integer", "default": 4000},
+            "offset": {"type": "integer", "default": 0,
+                       "description": "이어 읽을 시작 위치"},
+        },
+        "required": ["file_id"],
+    },
+)
+async def read_file(ctx: ToolContext, file_id: str, max_chars: int = 4000,
+                    offset: int = 0) -> str:
+    from app.core.files import read_text
+    rec, err = await _file_in_channel(ctx, file_id)
+    if err:
+        return err
+    if not rec.is_text:
+        return (f"오류: {rec.name} 은(는) 텍스트로 읽을 수 없는 형식입니다 "
+                f"({rec.content_type}).")
+    ok, out = read_text(file_id, max_chars=int(max_chars or 4000),
+                        offset=int(offset or 0))
+    return out if ok else f"오류: {out}"
+
+
+@registry.register(
+    "describe_table",
+    "CSV/TSV 파일의 구조를 파악한다. 컬럼 이름·타입·값 범위·행 수·빈값 개수와 "
+    "샘플 몇 줄을 돌려준다. 표 데이터는 원문을 읽기 전에 이걸 먼저 쓴다.",
+    {
+        "type": "object",
+        "properties": {
+            "file_id": {"type": "string"},
+            "sample_rows": {"type": "integer", "default": 5},
+        },
+        "required": ["file_id"],
+    },
+)
+async def describe_table(ctx: ToolContext, file_id: str, sample_rows: int = 5) -> str:
+    from app.core.files import describe_table as _describe
+    rec, err = await _file_in_channel(ctx, file_id)
+    if err:
+        return err
+    ok, out = _describe(file_id, sample_rows=max(1, min(int(sample_rows or 5), 20)))
+    return f"[{rec.name}]\n{out}" if ok else f"오류: {out}"
+
+
 @registry.register(
     "fetch_url",
     "웹 페이지를 읽는다. 사람이 준 링크나 공개 문서를 확인할 때 쓴다. "

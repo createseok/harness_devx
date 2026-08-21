@@ -12,8 +12,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
@@ -21,8 +21,8 @@ from app.core.bus import bus
 from app.core.engine import Engine
 from app.core.guards import TraceBudget
 from app.core.models import (
-    Agent, Channel, ChannelMember, Human, MemberType, Message, ReplyMode,
-    Task, TaskStatus, new_id,
+    Agent, Channel, ChannelMember, FileRecord, Human, MemberType, Message,
+    ReplyMode, Task, TaskStatus, new_id,
 )
 from app.core.router import MENTION_RE
 from app.core.tools import registry
@@ -459,6 +459,83 @@ async def update_task(task_id: str, body: UpdateTask,
     if updated is None:
         raise HTTPException(404, "태스크가 없습니다")
     return updated
+
+
+@app.get("/api/channels/{channel_id}/files")
+async def list_files(channel_id: str, store: Store = Depends(get_store)):
+    from app.core.files import human_size
+    return [
+        {"id": f.id, "name": f.name, "size": f.size, "size_h": human_size(f.size),
+         "content_type": f.content_type, "uploader": f.uploader_name,
+         "message_id": f.message_id, "created_at": f.created_at}
+        for f in await store.list_files(channel_id)
+    ]
+
+
+@app.post("/api/channels/{channel_id}/files")
+async def upload_file(channel_id: str, file: UploadFile = File(...),
+                      author_id: str = Form(...), author_name: str = Form(...),
+                      text: str = Form(""),
+                      store: Store = Depends(get_store),
+                      engine: Engine = Depends(get_engine)):
+    """파일을 올리고 **채널에 메시지로 알린다.**
+
+    알림 메시지가 곧 트리거다 — text 에 '@데이터분석가 분석해줘' 를 적으면
+    기존 디스패처가 그를 깨운다. 파일 전용 알림 경로를 따로 만들지 않는다.
+    """
+    from app.core.files import MAX_UPLOAD_BYTES, human_size, preview_for_message, save_bytes
+
+    if not await store.get_channel(channel_id):
+        raise HTTPException(404, "채널이 없습니다")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "빈 파일입니다")
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            413, f"파일이 너무 큽니다 ({human_size(len(raw))}). "
+                 f"상한은 {human_size(MAX_UPLOAD_BYTES)} 입니다.")
+
+    file_id = new_id("fil")
+    save_bytes(file_id, raw)
+    # 원본 파일명은 표시용으로만 쓴다 — 경로로는 절대 쓰지 않는다
+    safe_name = (file.filename or "untitled").replace("\n", " ")[:200]
+
+    hint = preview_for_message(safe_name, file.content_type or "", raw)
+    header = f"[파일] {safe_name} · {human_size(len(raw))}" + (f" · {hint}" if hint else "")
+    body = f"{header}\n(file_id: {file_id})"
+    if text.strip():
+        body = f"{text.strip()}\n\n{body}"
+
+    msg = Message(
+        id=new_id("msg"), channel_id=channel_id, author_type=MemberType.HUMAN,
+        author_id=author_id, author_name=author_name, text=body,
+        trace_id=new_id("trace"), meta={"file_id": file_id},
+    )
+    await store.add_file(FileRecord(
+        id=file_id, channel_id=channel_id, name=safe_name, size=len(raw),
+        content_type=file.content_type or "", uploader_id=author_id,
+        uploader_name=author_name, message_id=msg.id))
+
+    asyncio.ensure_future(engine.submit(msg))
+    return {"file_id": file_id, "name": safe_name, "size": len(raw),
+            "message": _msg_dict(msg)}
+
+
+@app.get("/api/files/{file_id}/download")
+async def download_file(file_id: str, store: Store = Depends(get_store)):
+    from app.core.files import path_for
+    rec = await store.get_file(file_id)
+    if rec is None:
+        raise HTTPException(404, "파일이 없습니다")
+    try:
+        p = path_for(file_id)
+    except ValueError:
+        raise HTTPException(400, "올바르지 않은 file_id")
+    if not p.exists():
+        raise HTTPException(404, "파일 본문이 없습니다")
+    return FileResponse(p, filename=rec.name,
+                        media_type=rec.content_type or "application/octet-stream")
 
 
 @app.get("/api/channels/{channel_id}/stream")
