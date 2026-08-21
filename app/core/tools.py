@@ -291,6 +291,133 @@ async def describe_table(ctx: ToolContext, file_id: str, sample_rows: int = 5) -
     return f"[{rec.name}]\n{out}" if ok else f"오류: {out}"
 
 
+# --- 산출물 만들기 --------------------------------------------------------
+# 만든 파일은 업로드와 똑같이 FileRecord 로 채널에 올라간다. 그래야 사람이
+# 내려받을 수 있고, 다른 에이전트가 read_file 로 읽어 이어서 작업한다.
+
+async def _publish(ctx: ToolContext, name: str, data: bytes, mime: str,
+                   note: str) -> str:
+    from app.core.files import human_size, save_bytes
+    from app.core.models import FileRecord
+
+    if len(data) > 25 * 1024 * 1024:
+        return f"오류: 생성물이 너무 큽니다 ({human_size(len(data))})."
+    file_id = new_id("fil")
+    save_bytes(file_id, data)
+    msg = await ctx.emit(f"[파일] {name} · {human_size(len(data))} · {note}\n"
+                         f"(file_id: {file_id})")
+    await ctx.store.add_file(FileRecord(
+        id=file_id, channel_id=ctx.channel_id, name=name, size=len(data),
+        content_type=mime, uploader_type=MemberType.AGENT,
+        uploader_id=ctx.agent.id, uploader_name=ctx.agent.name,
+        message_id=msg.id))
+    return f"{name} 생성 완료 ({human_size(len(data))}, file_id={file_id}). 채널에 올렸습니다."
+
+
+@registry.register(
+    "write_file",
+    "텍스트 파일을 만들어 채널에 올린다. 마크다운 보고서, 코드, CSV, 설정 파일 등. "
+    "긴 결과물은 채팅에 붙여넣지 말고 이걸로 파일을 만든다.",
+    {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "확장자 포함 (예: 보고서.md, main.py)"},
+            "content": {"type": "string", "description": "파일 내용 전체"},
+        },
+        "required": ["name", "content"],
+    },
+)
+async def write_file(ctx: ToolContext, name: str, content: str) -> str:
+    from app.core.documents import MAX_CHARS, clean_name, guess_mime
+    if len(content or "") > MAX_CHARS:
+        return f"오류: 내용이 너무 깁니다 ({len(content):,}자, 상한 {MAX_CHARS:,})."
+    fname = clean_name(name, default="untitled.txt")
+    lines = (content or "").count("\n") + 1
+    return await _publish(ctx, fname, (content or "").encode("utf-8"),
+                          guess_mime(fname), f"{lines:,}줄")
+
+
+@registry.register(
+    "create_document",
+    "워드 문서(.docx)를 만든다. 내용은 **마크다운**으로 쓴다 — "
+    "# 제목, ## 소제목, - 불릿, |표|, ```코드``` 를 그대로 쓰면 서식이 적용된다.",
+    {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "예: 결제장애_보고서.docx"},
+            "markdown": {"type": "string", "description": "문서 내용 (마크다운)"},
+        },
+        "required": ["name", "markdown"],
+    },
+)
+async def create_document(ctx: ToolContext, name: str, markdown: str) -> str:
+    from app.core.documents import MIME, MAX_CHARS, build_docx, clean_name
+    if len(markdown or "") > MAX_CHARS:
+        return f"오류: 내용이 너무 깁니다 ({len(markdown):,}자)."
+    fname = clean_name(name, default="document.docx", force_ext=".docx")
+    try:
+        data = build_docx(markdown or "")
+    except Exception as exc:
+        return f"오류: 문서 생성 실패 — {type(exc).__name__}: {exc}"
+    return await _publish(ctx, fname, data, MIME[".docx"], "Word 문서")
+
+
+@registry.register(
+    "create_spreadsheet",
+    "엑셀 파일(.xlsx)을 만든다. 내용은 **CSV 텍스트**로 쓴다. "
+    "첫 줄이 헤더가 되고, 숫자로 보이는 값은 숫자 셀로 들어가 합계·정렬이 된다.",
+    {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "예: 실패율_분해.xlsx"},
+            "csv": {"type": "string", "description": "표 내용 (CSV, 첫 줄이 헤더)"},
+            "sheet_name": {"type": "string", "default": "Sheet1"},
+        },
+        "required": ["name", "csv"],
+    },
+)
+async def create_spreadsheet(ctx: ToolContext, name: str, csv: str,
+                             sheet_name: str = "Sheet1") -> str:
+    from app.core.documents import MIME, MAX_CHARS, build_xlsx, clean_name
+    if len(csv or "") > MAX_CHARS:
+        return f"오류: 내용이 너무 깁니다 ({len(csv):,}자)."
+    fname = clean_name(name, default="table.xlsx", force_ext=".xlsx")
+    try:
+        data, rows, cols = build_xlsx(csv or "", sheet_name=sheet_name or "Sheet1")
+    except Exception as exc:
+        return f"오류: 스프레드시트 생성 실패 — {type(exc).__name__}: {exc}"
+    if rows == 0:
+        return "오류: 내용이 비어 있습니다."
+    return await _publish(ctx, fname, data, MIME[".xlsx"], f"{rows:,}행 {cols}열")
+
+
+@registry.register(
+    "create_slides",
+    "파워포인트(.pptx)를 만든다. 내용은 **마크다운**으로 쓴다 — "
+    "# 또는 ## 가 새 슬라이드를 열고, 그 아래 - 불릿이 본문이 된다. "
+    "슬라이드당 불릿 5개 이하로 유지한다.",
+    {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "예: 장애보고.pptx"},
+            "markdown": {"type": "string",
+                         "description": "# 슬라이드제목 / - 불릿 형태의 마크다운"},
+        },
+        "required": ["name", "markdown"],
+    },
+)
+async def create_slides(ctx: ToolContext, name: str, markdown: str) -> str:
+    from app.core.documents import MIME, MAX_CHARS, build_pptx, clean_name
+    if len(markdown or "") > MAX_CHARS:
+        return f"오류: 내용이 너무 깁니다 ({len(markdown):,}자)."
+    fname = clean_name(name, default="slides.pptx", force_ext=".pptx")
+    try:
+        data, n = build_pptx(markdown or "")
+    except Exception as exc:
+        return f"오류: 슬라이드 생성 실패 — {type(exc).__name__}: {exc}"
+    return await _publish(ctx, fname, data, MIME[".pptx"], f"{n}장")
+
+
 @registry.register(
     "fetch_url",
     "웹 페이지를 읽는다. 사람이 준 링크나 공개 문서를 확인할 때 쓴다. "
