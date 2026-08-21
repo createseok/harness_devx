@@ -1,0 +1,144 @@
+"""도메인 모델. 저장소(DB/메모리)와 무관한 순수 dataclass."""
+from __future__ import annotations
+
+import time
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def now_ts() -> float:
+    return time.time()
+
+
+class MemberType(str, Enum):
+    HUMAN = "human"
+    AGENT = "agent"
+
+
+class ReplyMode(str, Enum):
+    """GenTeam의 reply mode. 기본값이 MENTION인 것이 폭주 방지의 1차 방어선."""
+
+    MENTION = "mention"   # @멘션 됐을 때만 반응 (기본값)
+    ALL = "all"           # 채널의 모든 메시지에 반응
+
+
+class MessageKind(str, Enum):
+    CHAT = "chat"           # 사람/에이전트의 일반 발화
+    TOOL_LOG = "tool_log"   # 에이전트의 내부 툴 실행 기록 (UI에서 접어둠)
+    SYSTEM = "system"       # 입장/퇴장/상태 변경 등
+
+
+class TaskStatus(str, Enum):
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    IN_REVIEW = "in_review"
+    DONE = "done"
+
+
+class RunStatus(str, Enum):
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass
+class Agent:
+    id: str
+    workspace_id: str
+    name: str                      # @멘션에 쓰이는 핸들. 워크스페이스 내 유일해야 함
+    role_prompt: str               # 역할 기술서(JD). 시스템 프롬프트의 핵심
+    model: Optional[str] = None    # None이면 기본 모델
+    reply_mode: ReplyMode = ReplyMode.MENTION
+    enabled: bool = True
+    avatar: Optional[str] = None
+    max_steps: int = 8             # 한 턴에서 허용할 툴 루프 최대 횟수
+    created_at: float = field(default_factory=now_ts)
+
+
+@dataclass
+class Human:
+    id: str
+    workspace_id: str
+    name: str
+    email: Optional[str] = None
+
+
+@dataclass
+class Channel:
+    id: str
+    workspace_id: str
+    name: str
+    is_dm: bool = False
+    topic: str = ""
+    created_at: float = field(default_factory=now_ts)
+
+
+@dataclass
+class ChannelMember:
+    channel_id: str
+    member_type: MemberType
+    member_id: str
+    # 채널별 reply mode 오버라이드. None이면 에이전트 기본값 사용
+    reply_mode: Optional[ReplyMode] = None
+
+
+@dataclass
+class Message:
+    id: str
+    channel_id: str
+    author_type: MemberType
+    author_id: str
+    author_name: str
+    text: str
+    kind: MessageKind = MessageKind.CHAT
+    thread_id: Optional[str] = None   # None이면 채널 최상위 메시지
+    # --- 폭주 제어용 계보 정보 ---
+    trace_id: str = ""                # 사람의 한 마디에서 시작된 연쇄 전체의 ID
+    depth: int = 0                    # 그 연쇄에서 몇 번째 홉인가
+    caused_by: Optional[str] = None    # 이 메시지를 유발한 메시지 ID
+    created_at: float = field(default_factory=now_ts)
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Task:
+    """Phase 3용. 스키마만 미리 잡아두어 나중에 마이그레이션이 없도록 함."""
+
+    id: str
+    channel_id: str
+    title: str
+    description: str = ""
+    status: TaskStatus = TaskStatus.TODO
+    assignee_type: Optional[MemberType] = None
+    assignee_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    created_at: float = field(default_factory=now_ts)
+
+
+@dataclass
+class AgentRun:
+    """에이전트 한 턴의 실행 기록. 멱등성 키이자 관측/과금 단위."""
+
+    id: str
+    agent_id: str
+    channel_id: str
+    trigger_message_id: str
+    trace_id: str
+    depth: int
+    status: RunStatus = RunStatus.RUNNING
+    steps: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    error: Optional[str] = None
+    created_at: float = field(default_factory=now_ts)
+
+    @property
+    def idem_key(self) -> str:
+        return f"{self.agent_id}:{self.trigger_message_id}"

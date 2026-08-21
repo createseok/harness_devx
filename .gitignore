@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.Python
+build/
+dist/
+
+# 환경변수 — 사내 AI 키가 들어가므로 절대 커밋 금지
+.env
+.env.local
+*.key
+
+# 에디터/OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 로컬 DB / 로그
+*.db
+*.sqlite3
+*.log
