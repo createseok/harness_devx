@@ -36,6 +36,25 @@ log = logging.getLogger(__name__)
 #: 시스템 프롬프트가 이보다 길면 argv 대신 stdin 프롬프트에 접어넣는다 (ARG_MAX 방어)
 _ARGV_SYSTEM_LIMIT = 100_000
 
+#: 재시도해도 절대 성공하지 않는 오류 신호. 종료코드/stderr/stdout JSON 모두에서 본다.
+_FATAL_SIGNS = (
+    "not logged in", "please run /login", "unauthor", "invalid api key",
+    "credit balance", "unknown option", "unrecognized", "no such option",
+    "permission denied", "quota",
+)
+
+_LOGIN_HINT = (
+    "claude CLI에 로그인되어 있지 않습니다.\n"
+    "  터미널에서 `claude` 를 실행해 로그인한 뒤 다시 시도하세요.\n"
+    "  (헤드리스 모드는 로그인을 대신 처리할 수 없습니다)"
+)
+
+
+def _is_fatal(text: str) -> bool:
+    low = (text or "").lower()
+    return any(sign in low for sign in _FATAL_SIGNS)
+
+
 _INSTALL_HINT = (
     "`claude` CLI를 찾을 수 없습니다.\n"
     "  설치:  npm install -g @anthropic-ai/claude-code\n"
@@ -72,12 +91,15 @@ class ClaudeCliProvider(LLMProvider):
 
     def _resolve_cli(self) -> str:
         if self._resolved is None:
-            found = shutil.which(self.cli_path) or (
-                self.cli_path if os.path.isfile(self.cli_path) else None
+            found = (
+                shutil.which(self.cli_path)
+                or (self.cli_path if os.path.isfile(self.cli_path) else None)
+                or _search_node_managers()
             )
             if not found:
                 raise LLMError(_INSTALL_HINT)
             self._resolved = found
+            log.info("claude CLI: %s", found)
         return self._resolved
 
     @staticmethod
@@ -162,15 +184,20 @@ class ClaudeCliProvider(LLMProvider):
             raise LLMTransientError(f"claude CLI 타임아웃 ({self.timeout}s)")
 
         err = stderr.decode(errors="replace").strip()
+        out = stdout.decode(errors="replace")
+
+        # 중요: CLI는 실패해도 종료코드 1 + **stdout에 구조화된 JSON** 을 남긴다.
+        # 종료코드만 보고 stdout을 버리면 "Not logged in" 같은 실제 원인을 잃는다.
+        if out.strip():
+            return self._parse(out, err)
+
         if proc.returncode != 0:
-            msg = f"claude CLI 종료코드 {proc.returncode}: {err[:400]}"
-            # 인증/설정 오류는 재시도해봐야 소용없다
-            if any(k in err.lower() for k in ("not logged in", "unauthor", "invalid api key",
-                                              "unknown option", "unrecognized")):
+            msg = f"claude CLI 종료코드 {proc.returncode}: {err[:400] or '(stdout/stderr 모두 비어 있음)'}"
+            if _is_fatal(err):
                 raise LLMError(msg + f"\n실행한 명령: {' '.join(argv[:8])} …")
             raise LLMTransientError(msg)
 
-        return self._parse(stdout.decode(errors="replace"), err)
+        raise LLMTransientError(f"claude CLI가 빈 응답을 반환했습니다. stderr: {err[:200]}")
 
     def _parse(self, raw_stdout: str, stderr: str) -> LLMResponse:
         text_out = raw_stdout.strip()
@@ -184,8 +211,17 @@ class ClaudeCliProvider(LLMProvider):
             log.debug("claude CLI가 JSON이 아닌 출력을 반환 — 평문으로 처리")
             return LLMResponse(text=text_out, raw={"stdout": text_out})
 
+        # CLI는 인증 실패도 종료코드 0 + is_error:true 로 돌려준다.
+        # 이걸 transient 로 취급하면 무의미한 재시도만 반복하게 된다.
         if payload.get("is_error"):
-            raise LLMTransientError(f"claude CLI 오류: {str(payload)[:400]}")
+            detail = payload.get("result")
+            if not isinstance(detail, str):
+                detail = str(payload.get("error") or payload)[:400]
+            if "login" in detail.lower() or "not logged in" in detail.lower():
+                raise LLMError(f"{_LOGIN_HINT}\n  CLI 응답: {detail}")
+            if _is_fatal(detail):
+                raise LLMError(f"claude CLI 오류(재시도 무의미): {detail}")
+            raise LLMTransientError(f"claude CLI 오류: {detail}")
 
         result = payload.get("result", payload)
 
@@ -209,6 +245,52 @@ class ClaudeCliProvider(LLMProvider):
             raw=payload,
             finish_reason=(result.get("stop_reason") if isinstance(result, dict) else None) or "stop",
         )
+
+
+def _version_key(name: str):
+    """'v22.23.2' → (22, 23, 2). 정렬 실패해도 죽지 않게 한다."""
+    parts = []
+    for chunk in name.lstrip("v").split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def _search_node_managers() -> Optional[str]:
+    """nvm/fnm/volta 로 설치한 claude 를 찾는다.
+
+    파이썬 서브프로세스는 로그인 셸을 거치지 않으므로 nvm이 PATH에 주입한
+    경로를 보지 못한다. uvicorn/systemd 로 띄우면 거의 항상 여기 걸린다.
+    가장 높은 node 버전을 고른다.
+    """
+    home = os.path.expanduser("~")
+    roots = [
+        os.path.join(home, ".nvm", "versions", "node"),
+        os.path.join(home, ".fnm", "node-versions"),
+        os.path.join(home, ".volta", "bin"),
+        os.path.join(home, ".local", "share", "fnm", "node-versions"),
+    ]
+    candidates = []
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        direct = os.path.join(root, "claude")
+        if os.path.isfile(direct) and os.access(direct, os.X_OK):
+            return direct
+        for entry in os.listdir(root):
+            for sub in ("bin", os.path.join("installation", "bin")):
+                path = os.path.join(root, entry, sub, "claude")
+                if os.path.isfile(path) and os.access(path, os.X_OK):
+                    candidates.append((_version_key(entry), path))
+    if candidates:
+        candidates.sort()
+        return candidates[-1][1]
+
+    for path in ("/usr/local/bin/claude", "/opt/homebrew/bin/claude",
+                 os.path.join(home, ".local", "bin", "claude")):
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
 
 
 def _extract_text(result: Dict[str, Any]) -> str:
