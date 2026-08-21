@@ -51,10 +51,10 @@ class Settings:
     use_memory_store: bool = _bool("USE_MEMORY_STORE", False)
 
     # --- 폭주 제어 (프로덕션에서 가장 자주 조정할 값들) ---
-    max_mention_depth: int = _int("MAX_MENTION_DEPTH", 4)
-    max_trace_tokens: int = _int("MAX_TRACE_TOKENS", 120_000)
-    max_trace_runs: int = _int("MAX_TRACE_RUNS", 20)
-    max_agent_steps: int = _int("MAX_AGENT_STEPS", 8)
+    max_mention_depth: int = _int("MAX_MENTION_DEPTH", 3)
+    max_trace_tokens: int = _int("MAX_TRACE_TOKENS", 60_000)
+    max_trace_runs: int = _int("MAX_TRACE_RUNS", 10)
+    max_agent_steps: int = _int("MAX_AGENT_STEPS", 6)
     max_concurrency: int = _int("MAX_CONCURRENCY", 8)
 
     def validate_corp(self) -> None:

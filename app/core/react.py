@@ -39,6 +39,21 @@ FORMAT_INSTRUCTIONS = """\
 - args는 유효한 JSON이어야 한다. 주석이나 후행 쉼표를 넣지 않는다."""
 
 
+CHANNEL_ETIQUETTE = """\
+# 채널 예절 (반드시 지킬 것)
+
+여기는 **채팅 채널**이다. 보고서를 쓰는 곳이 아니다.
+
+- 한 메시지는 **3~5문장**이 기본이다. 사람이 스크롤 없이 읽을 수 있어야 한다.
+- 표·번호목록·소제목은 쓰지 않는다. 정말 필요하면 불릿 3개까지만.
+- 결론을 먼저 쓴다. 과정 설명은 물어보면 그때 한다.
+- 앞에서 이미 나온 말을 다시 쓰지 않는다.
+- 계획을 길게 늘어놓지 말고, 할 수 있는 것부터 한다.
+- 남에게 일을 넘길 때는 **무엇이 필요한지 한두 문장**으로 적는다.
+  요구사항을 조목조목 나열하면 상대가 답장만 길게 쓰고 일은 안 한다.
+- 모르면 모른다고 한 줄로 말한다. 못 하는 이유를 길게 설명하지 않는다."""
+
+
 def render_system_prompt(role_prompt: str, tools: List[ToolSpec], context_block: str) -> str:
     """에이전트의 시스템 프롬프트를 조립한다."""
     tool_block = "\n".join(t.to_prompt_block() for t in tools)
@@ -48,6 +63,8 @@ def render_system_prompt(role_prompt: str, tools: List[ToolSpec], context_block:
 {tool_block}
 
 {FORMAT_INSTRUCTIONS}
+
+{CHANNEL_ETIQUETTE}
 
 # 현재 상황
 {context_block}"""

@@ -131,7 +131,7 @@ _STR = {"type": "string"}
 
 @registry.register(
     "post_message",
-    "채널에 메시지를 올린다. 사람과 다른 에이전트가 볼 수 있는 유일한 방법이다.",
+    "채널에 메시지를 올린다. 사람과 다른 에이전트가 볼 수 있는 유일한 방법이다. 3~5문장으로 짧게. 표나 긴 목록은 쓰지 않는다.",
     {"type": "object", "properties": {"text": _STR}, "required": ["text"]},
 )
 async def post_message(ctx: ToolContext, text: str) -> str:
@@ -152,12 +152,12 @@ async def reply_in_thread(ctx: ToolContext, text: str) -> str:
 
 @registry.register(
     "mention_agent",
-    "다른 에이전트를 @멘션해서 일을 넘긴다. 요청 내용을 구체적으로 적어야 상대가 바로 착수할 수 있다.",
+    "다른 에이전트를 @멘션해서 일을 넘긴다. 요청은 한두 문장으로 짧게 — 요구사항을 길게 나열하면 상대가 답장만 길어지고 일은 안 한다.",
     {
         "type": "object",
         "properties": {
             "agent": {"type": "string", "description": "에이전트 이름 (@ 없이)"},
-            "request": {"type": "string", "description": "무엇을 해달라는지 구체적으로"},
+            "request": {"type": "string", "description": "무엇을 해달라는지 한두 문장으로"},
         },
         "required": ["agent", "request"],
     },
