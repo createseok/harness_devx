@@ -97,7 +97,19 @@ ReAct 형식 준수력. 4번 결과에 따라 `CORP_AI_NATIVE_TOOLS` 를 정한�
 
 ## 웹 UI
 
-서버를 띄우고 http://127.0.0.1:8765 를 연다. 빌드 단계 없는 단일 HTML
+```bash
+./scripts/dev.sh
+```
+
+Postgres 확인 → venv 확인 → 포트 정리 → claude CLI 로그인 확인 →
+uvicorn 포그라운드 실행까지 한 번에 한다. 막히는 지점마다 조치 방법을
+알려주고 멈춘다. 뜨면 http://127.0.0.1:8765 를 연다.
+
+채널이 비어 있으면 다른 터미널에서:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/seed_api.py
+``` 빌드 단계 없는 단일 HTML
 (`app/api/static/index.html`) 이라 CDN 없이 오프라인에서도 뜬다.
 
 ```
