@@ -4,7 +4,7 @@ set -u
 cd "$(dirname "$0")/.."
 export PYTHONPATH=.
 fail=0
-for t in tests/test_react.py tests/test_guards.py tests/test_router.py \
+for t in tests/test_react.py tests/test_guards.py tests/test_router.py tests/test_registry.py \
          scripts/demo.py scripts/demo_runaway.py; do
   echo ""
   echo "═══ $t ═══"

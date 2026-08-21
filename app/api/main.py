@@ -31,19 +31,9 @@ state: dict = {}
 
 
 def build_provider() -> LLMProvider:
-    if settings.use_memory_store and not settings.corp_ai_base_url:
-        from app.llm.mock import ScriptedProvider
-        return ScriptedProvider({})
-    settings.validate()
-    from app.llm.corp import CorpProvider
-    return CorpProvider(
-        base_url=settings.corp_ai_base_url,
-        api_key=settings.corp_ai_api_key,
-        default_model=settings.corp_ai_model,
-        supports_native_tools=settings.corp_ai_native_tools,
-        timeout=settings.corp_ai_timeout,
-        max_retries=settings.corp_ai_max_retries,
-    )
+    """LLM_PROVIDER 환경변수 하나로 백엔드가 결정된다."""
+    from app.llm.registry import build_provider as _build
+    return _build()
 
 
 async def build_store() -> Store:
@@ -138,7 +128,13 @@ class PostMessage(BaseModel):
 # --- 엔드포인트 ---
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "native_tools": settings.corp_ai_native_tools}
+    provider = state.get("provider")
+    return {
+        "ok": True,
+        "provider": settings.llm_provider,
+        "model": getattr(provider, "default_model", None),
+        "native_tools": getattr(provider, "supports_native_tools", None),
+    }
 
 
 @app.post("/api/agents")

@@ -36,7 +36,38 @@ PYTHONPATH=. python3 scripts/demo_runaway.py   # 폭주 제어 검증
 ./scripts/check.sh                             # 전체 검증
 ```
 
-## 사내 AI 연결하기
+## LLM 백엔드 교체
+
+애플리케이션 코드는 어느 백엔드가 쓰이는지 **전혀 모른다.** 교체는 `.env` 한 줄이다.
+
+```bash
+LLM_PROVIDER=claude_cli   # 지금: claude -p, API 키 불필요
+LLM_PROVIDER=anthropic    # Anthropic API, 네이티브 tool calling
+LLM_PROVIDER=corp         # 나중: 사내 AI
+LLM_PROVIDER=mock         # 테스트/데모
+```
+
+| Provider | 인증 | tool calling | 특징 |
+|---|---|---|---|
+| `claude_cli` | 기존 Claude 구독 | ReAct 폴백 | API 키 불필요. 호출당 프로세스 스폰이라 느림 |
+| `anthropic` | `ANTHROPIC_API_KEY` 또는 `ant auth login` | **네이티브** | 가장 빠르고 정확. 별도 과금 |
+| `corp` | 사내 게이트웨이 | 설정에 따름 | `[EDIT 1~3]` 채운 뒤 전환 |
+
+이게 지켜지는지 테스트가 강제한다 — `tests/test_registry.py` 가
+`app/core`, `app/store`, `app/api` 안에 provider 이름이 등장하면 실패시킨다.
+
+### 지금 바로: claude -p 로 개발 시작
+
+```bash
+npm install -g @anthropic-ai/claude-code    # Node >= 22 필요
+PYTHONPATH=. python3 scripts/probe_claude_cli.py
+```
+
+`--tools ""` 로 Claude Code 자체 툴(Read/Bash/Edit)을 끄고, `--max-turns 1` 로
+CLI의 자체 에이전트 루프를 막은 뒤 순수 텍스트 완성만 받아온다.
+툴 호출은 우리 ReAct 레이어가 처리한다.
+
+## 나중에: 사내 AI 연결하기
 
 ### 1. 어댑터 수정 — `app/llm/corp.py` 세 곳만
 
@@ -54,7 +85,7 @@ PYTHONPATH=. python3 scripts/demo_runaway.py   # 폭주 제어 검증
 cp .env.example .env   # CORP_AI_BASE_URL / CORP_AI_API_KEY / CORP_AI_MODEL 채우기
 ```
 
-### 3. 연결 확인 — **여기부터 시작할 것**
+### 3. 연결 확인
 
 ```bash
 PYTHONPATH=. python3 scripts/probe_corp.py
@@ -85,9 +116,12 @@ app/
 │   ├── runtime.py        에이전트 한 턴의 루프
 │   ├── engine.py         순환을 굴리는 오케스트레이터
 │   └── bus.py            SSE 팬아웃
-├── llm/
+├── llm/                  ← LLM 종속성이 갇혀 있는 유일한 디렉터리
 │   ├── base.py           LLMProvider 인터페이스
-│   ├── corp.py           ★ 사내 AI 어댑터 — 유일한 종속 지점
+│   ├── registry.py       ★ 교체 지점 — LLM_PROVIDER 로 백엔드 결정
+│   ├── claude_cli.py     claude -p (지금)
+│   ├── anthropic_api.py  Anthropic API (네이티브 tool calling)
+│   ├── corp.py           사내 AI 어댑터 [EDIT 1~3] (나중)
 │   └── mock.py           테스트/데모용
 ├── store/
 │   ├── base.py           Store 인터페이스
@@ -118,7 +152,7 @@ app/
 
 ## 구현 순서
 
-- [x] **0단계** LLM 어댑터 — 사내 AI 연동
+- [x] **0단계** LLM 어댑터 — provider 팩토리 + claude_cli / anthropic / corp
 - [x] **1단계** 툴 루프 — `post_message` / `reply_in_thread`
 - [x] **2단계** 멀티 에이전트 + @멘션 라우팅 + 루프 가드
 - [ ] **3단계** 태스크 보드 — `create_task` / `claim_task` / `update_task_status`

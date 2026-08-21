@@ -18,6 +18,22 @@ def _bool(key: str, default: bool = False) -> bool:
 
 @dataclass
 class Settings:
+    # --- LLM 백엔드 선택 (교체 지점) ---
+    #: claude_cli | anthropic | corp | mock
+    llm_provider: str = os.getenv("LLM_PROVIDER", "claude_cli")
+
+    # --- claude -p (Claude Code 헤드리스) ---
+    claude_cli_path: str = os.getenv("CLAUDE_CLI_PATH", "claude")
+    claude_cli_model: str = os.getenv("CLAUDE_CLI_MODEL", "opus")
+    claude_cli_timeout: float = float(os.getenv("CLAUDE_CLI_TIMEOUT", "180"))
+    claude_cli_max_budget_usd: float = float(os.getenv("CLAUDE_CLI_MAX_BUDGET_USD", "0") or 0)
+    claude_cli_extra_args: str = os.getenv("CLAUDE_CLI_EXTRA_ARGS", "")
+
+    # --- Anthropic API ---
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
+    anthropic_effort: str = os.getenv("ANTHROPIC_EFFORT", "medium")
+
     # --- 사내 AI ---
     corp_ai_base_url: str = os.getenv("CORP_AI_BASE_URL", "")
     corp_ai_api_key: str = os.getenv("CORP_AI_API_KEY", "")
@@ -41,7 +57,8 @@ class Settings:
     max_agent_steps: int = _int("MAX_AGENT_STEPS", 8)
     max_concurrency: int = _int("MAX_CONCURRENCY", 8)
 
-    def validate(self) -> None:
+    def validate_corp(self) -> None:
+        """LLM_PROVIDER=corp 일 때만 필요한 검증."""
         missing = [
             name for name, val in (
                 ("CORP_AI_BASE_URL", self.corp_ai_base_url),

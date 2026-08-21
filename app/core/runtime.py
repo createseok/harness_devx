@@ -24,6 +24,14 @@ from app.store.base import Store
 log = logging.getLogger(__name__)
 
 
+def _native_blocks(resp) -> Optional[List[Any]]:
+    """provider가 원본 content 블록을 실어보냈으면 그대로 돌려준다."""
+    raw = getattr(resp, "raw", None)
+    if isinstance(raw, dict):
+        return raw.get("content")
+    return None
+
+
 @dataclass
 class TurnResult:
     run: AgentRun
@@ -128,21 +136,31 @@ class AgentRuntime:
                     ))
                     continue
 
-                convo.append(ChatMessage("assistant", resp.text or ""))
+                native = self.provider.supports_native_tools
+                # 네이티브 모드에서는 assistant 턴의 content 블록을 그대로 보존해야
+                # 다음 요청에서 tool_use ↔ tool_result 짝이 맞는다.
+                convo.append(ChatMessage(
+                    "assistant", resp.text or "",
+                    blocks=_native_blocks(resp) if native else None,
+                ))
 
                 # --- 툴 실행 ---
                 observations: List[str] = []
                 for call in calls:
                     result = await self.registry.execute(call.name, call.arguments, ctx)
                     observations.append(f"[{call.name}] {result}")
+                    if native:
+                        # 호출 1건당 tool_result 1건 — provider가 묶어서 보낸다
+                        convo.append(ChatMessage("tool", result, tool_call_id=call.id))
                     if self.log_tool_calls:
                         await self._write_tool_log(ctx, call, result)
                     if ctx.finished:
                         break
 
-                convo.append(ChatMessage(
-                    "user", "도구 실행 결과:\n" + "\n".join(observations)
-                ))
+                if not native:
+                    convo.append(ChatMessage(
+                        "user", "도구 실행 결과:\n" + "\n".join(observations)
+                    ))
 
                 if ctx.finished:
                     break

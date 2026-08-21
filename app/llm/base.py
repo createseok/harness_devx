@@ -18,6 +18,9 @@ class ChatMessage:
     content: str
     name: Optional[str] = None     # 발화자 표시용 (멀티 스피커 채널에서 중요)
     tool_call_id: Optional[str] = None
+    #: provider 고유 content 블록. 네이티브 tool calling에서 assistant 턴의
+    #: tool_use 블록을 손실 없이 되돌려보내기 위해 쓴다. ReAct 경로에서는 항상 None.
+    blocks: Optional[List[Any]] = None
 
 
 @dataclass

@@ -6,3 +6,6 @@ sqlalchemy[asyncio]>=2.0
 asyncpg>=0.30
 pydantic>=2.9
 python-dotenv>=1.0
+
+# LLM_PROVIDER=anthropic 일 때만 필요 (claude_cli 는 불필요)
+anthropic>=0.40
