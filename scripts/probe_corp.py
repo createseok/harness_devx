@@ -28,7 +28,7 @@ TOOL = ToolSpec(
 
 async def main() -> int:
     try:
-        settings.validate()
+        settings.validate_corp()
     except RuntimeError as exc:
         print(f"✗ {exc}")
         return 1

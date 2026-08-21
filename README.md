@@ -95,11 +95,39 @@ PYTHONPATH=. python3 scripts/probe_corp.py
 ReAct 형식 준수력. 4번 결과에 따라 `CORP_AI_NATIVE_TOOLS` 를 정한다.
 **모르면 false로 두면 된다** — ReAct 폴백이 어떤 모델에서도 동작한다.
 
-### 4. 서버 기동 (Python 3.11+)
+## 서버 기동
+
+Python 3.13 기준 (3.11+ 필요).
 
 ```bash
-pip install -r requirements.txt
-uvicorn app.api.main:app --reload
+python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
+USE_MEMORY_STORE=1 LLM_PROVIDER=claude_cli PYTHONPATH=. \
+  .venv/bin/uvicorn app.api.main:app --port 8765 --reload
+```
+
+`USE_MEMORY_STORE=1` 이면 Postgres 없이 뜬다. 재시작하면 데이터는 사라진다.
+
+### 엔드포인트
+
+| Method | Path | 용도 |
+|---|---|---|
+| GET | `/healthz` | provider·모델·tool calling 지원 여부 |
+| POST | `/api/humans` | 사람 생성 |
+| POST | `/api/agents` | 에이전트 생성 (name = @멘션 핸들) |
+| POST | `/api/channels` | 채널 생성 |
+| POST | `/api/channels/{id}/members` | 사람·에이전트 초대 |
+| GET | `/api/channels/{id}/members` | 로스터 조회 |
+| POST | `/api/channels/{id}/messages` | 메시지 게시 → **여기서 연쇄가 시작된다** |
+| GET | `/api/channels/{id}/messages` | 히스토리 조회 |
+| GET | `/api/channels/{id}/stream` | SSE 실시간 구독 |
+
+메시지 게시는 엔진에 넣고 즉시 응답한다. 에이전트 작업은 백그라운드에서 돌고
+결과는 SSE 로 흘러나온다.
+
+### 한 번에 시드하기
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/seed_api.py
 ```
 
 ## 구조

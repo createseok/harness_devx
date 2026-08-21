@@ -20,8 +20,7 @@ from app.core.bus import bus
 from app.core.engine import Engine
 from app.core.guards import TraceBudget
 from app.core.models import (
-    Agent, Channel, ChannelMember, Human, MemberType, Message, MessageKind,
-    ReplyMode, new_id,
+    Agent, Channel, ChannelMember, Human, MemberType, Message, ReplyMode, new_id,
 )
 from app.core.tools import registry
 from app.llm.base import LLMProvider
@@ -104,6 +103,12 @@ class CreateAgent(BaseModel):
     max_steps: int = 8
 
 
+class CreateHuman(BaseModel):
+    workspace_id: str
+    name: str
+    email: Optional[str] = None
+
+
 class CreateChannel(BaseModel):
     workspace_id: str
     name: str
@@ -154,6 +159,37 @@ async def create_agent(body: CreateAgent, store: Store = Depends(get_store)):
                 max_steps=agent.max_steps, created_at=agent.created_at,
             ))
     return agent
+
+
+@app.post("/api/humans")
+async def create_human(body: CreateHuman, store: Store = Depends(get_store)):
+    human = Human(id=new_id("usr"), **body.model_dump())
+    if hasattr(store, "put_human"):
+        store.put_human(human)
+    else:
+        from app.store.sql import HumanRow
+        async with store.session() as s, s.begin():
+            s.add(HumanRow(id=human.id, workspace_id=human.workspace_id,
+                           name=human.name, email=human.email))
+    return human
+
+
+@app.get("/api/channels/{channel_id}/members")
+async def list_members(channel_id: str, store: Store = Depends(get_store)):
+    """채널의 사람 + 에이전트 로스터."""
+    out = []
+    for cm in await store.channel_members(channel_id):
+        if cm.member_type == MemberType.AGENT:
+            a = await store.get_agent(cm.member_id)
+            if a:
+                out.append({"type": "agent", "id": a.id, "name": a.name,
+                            "reply_mode": (cm.reply_mode or a.reply_mode).value,
+                            "role": a.role_prompt.splitlines()[0][:120]})
+        else:
+            h = await store.get_human(cm.member_id)
+            if h:
+                out.append({"type": "human", "id": h.id, "name": h.name})
+    return out
 
 
 @app.post("/api/channels")
