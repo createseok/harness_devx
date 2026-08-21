@@ -20,7 +20,8 @@ from app.core.bus import bus
 from app.core.engine import Engine
 from app.core.guards import TraceBudget
 from app.core.models import (
-    Agent, Channel, ChannelMember, Human, MemberType, Message, ReplyMode, new_id,
+    Agent, Channel, ChannelMember, Human, MemberType, Message, ReplyMode,
+    Task, TaskStatus, new_id,
 )
 from app.core.tools import registry
 from app.llm.base import LLMProvider
@@ -120,6 +121,17 @@ class AddMember(BaseModel):
     member_type: MemberType
     member_id: str
     reply_mode: Optional[ReplyMode] = None
+
+
+class CreateTask(BaseModel):
+    title: str
+    description: str = ""
+    assignee_type: Optional[MemberType] = None
+    assignee_id: Optional[str] = None
+
+
+class UpdateTask(BaseModel):
+    status: TaskStatus
 
 
 class PostMessage(BaseModel):
@@ -247,6 +259,54 @@ async def post_message(channel_id: str, body: PostMessage,
     )
     asyncio.ensure_future(engine.submit(msg))
     return _msg_dict(msg)
+
+
+@app.get("/api/channels/{channel_id}/tasks")
+async def list_tasks(channel_id: str, store: Store = Depends(get_store)):
+    """태스크 보드. 칸반 컬럼별로 묶어서 돌려준다."""
+    tasks = await store.list_tasks(channel_id)
+    board = {s.value: [] for s in TaskStatus}
+    for t in sorted(tasks, key=lambda x: x.created_at):
+        assignee = None
+        if t.assignee_id:
+            if t.assignee_type == MemberType.AGENT:
+                a = await store.get_agent(t.assignee_id)
+                assignee = {"type": "agent", "id": t.assignee_id,
+                            "name": a.name if a else None}
+            else:
+                h = await store.get_human(t.assignee_id)
+                assignee = {"type": "human", "id": t.assignee_id,
+                            "name": h.name if h else None}
+        board[t.status.value].append({
+            "id": t.id, "title": t.title, "description": t.description,
+            "assignee": assignee, "thread_id": t.thread_id,
+            "created_at": t.created_at,
+        })
+    return board
+
+
+@app.post("/api/channels/{channel_id}/tasks")
+async def create_task(channel_id: str, body: CreateTask,
+                      store: Store = Depends(get_store)):
+    if not await store.get_channel(channel_id):
+        raise HTTPException(404, "채널이 없습니다")
+    task = Task(
+        id=new_id("tsk"), channel_id=channel_id, title=body.title,
+        description=body.description, assignee_type=body.assignee_type,
+        assignee_id=body.assignee_id,
+        status=TaskStatus.IN_PROGRESS if body.assignee_id else TaskStatus.TODO,
+    )
+    return await store.add_task(task)
+
+
+@app.patch("/api/tasks/{task_id}")
+async def update_task(task_id: str, body: UpdateTask,
+                      store: Store = Depends(get_store)):
+    """사람이 상태를 바꾼다. 에이전트와 달리 done 으로도 옮길 수 있다."""
+    updated = await store.update_task(task_id, status=body.status)
+    if updated is None:
+        raise HTTPException(404, "태스크가 없습니다")
+    return updated
 
 
 @app.get("/api/channels/{channel_id}/stream")

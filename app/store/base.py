@@ -11,7 +11,8 @@ import abc
 from typing import List, Optional
 
 from app.core.models import (
-    Agent, AgentRun, Channel, ChannelMember, Human, Message, Task,
+    Agent, AgentRun, Channel, ChannelMember, Human, MemberType, Message, Task,
+    TaskStatus,
 )
 
 
@@ -71,3 +72,20 @@ class Store(abc.ABC):
 
     @abc.abstractmethod
     async def list_tasks(self, channel_id: str) -> List[Task]: ...
+
+    @abc.abstractmethod
+    async def get_task(self, task_id: str) -> Optional[Task]: ...
+
+    @abc.abstractmethod
+    async def claim_task(self, task_id: str, member_type: MemberType,
+                         member_id: str) -> bool:
+        """담당자가 비어 있을 때만 선점한다. 원자적이어야 한다.
+
+        claim_run 과 같은 이유다 — 두 에이전트가 같은 태스크를 동시에
+        집으면 같은 일을 두 번 하게 된다. GenTeam 이 "태스크당 담당자 1명"
+        을 강제하는 것도 이 때문이다.
+        """
+
+    @abc.abstractmethod
+    async def update_task(self, task_id: str, *, status: Optional[TaskStatus] = None,
+                          thread_id: Optional[str] = None) -> Optional[Task]: ...

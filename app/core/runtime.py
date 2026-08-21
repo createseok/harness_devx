@@ -175,11 +175,18 @@ class AgentRuntime:
                     f"max_steps({agent.max_steps}) 도달 — finish 없이 종료했습니다."
                 )
 
-            # 아무 말도 안 하고 끝난 턴은 사람에게 침묵으로 보인다 → 흔적을 남긴다
-            if not ctx.emitted and not ctx.finished:
-                await ctx.emit(
-                    "(요청을 처리하지 못했습니다. 좀 더 구체적으로 알려주시겠어요?)"
-                )
+            # 아무 말도 안 하고 끝난 턴은 사람에게 그냥 침묵으로 보인다.
+            # finish 를 부르고 끝냈어도 마찬가지다 — 조회 도구만 쓰고 finish 하는
+            # 경우가 실제로 관찰됐고, 사람 입장에선 무응답과 구분되지 않는다.
+            if not ctx.emitted:
+                if ctx.finish_summary:
+                    await ctx.emit(ctx.finish_summary)
+                    warnings.append("발화 없이 finish — finish 요약을 대신 게시했습니다.")
+                else:
+                    await ctx.emit(
+                        "(요청을 처리하지 못했습니다. 좀 더 구체적으로 알려주시겠어요?)"
+                    )
+                    warnings.append("발화 없이 턴 종료 — 안내 메시지를 게시했습니다.")
 
             run.status = RunStatus.DONE
 

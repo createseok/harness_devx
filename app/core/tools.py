@@ -226,6 +226,191 @@ async def finish(ctx: ToolContext, summary: str = "") -> str:
     return "턴을 종료합니다."
 
 
-# --- Phase 3 자리: 태스크 보드 -------------------------------------------
-# create_task / claim_task / update_task_status 를 여기 등록하면
-# 런타임·디스패처 수정 없이 그대로 동작한다. 모델(Task)은 이미 정의되어 있다.
+# ---------------------------------------------------------------------------
+# 태스크 보드 (Phase 3)
+#
+# 설계 요점: 태스크 배정도 **채널 메시지**로 이뤄진다.
+# create_task 가 담당자를 멘션하는 메시지를 올리면 기존 디스패처가 그를 깨운다.
+# 태스크 전용 알림 경로를 따로 만들지 않는다 — 채널이 곧 프로토콜이다.
+# ---------------------------------------------------------------------------
+
+_STATUS_LABEL = {
+    TaskStatus.TODO: "할 일",
+    TaskStatus.IN_PROGRESS: "진행 중",
+    TaskStatus.IN_REVIEW: "검토 요청",
+    TaskStatus.DONE: "완료",
+}
+
+
+def _parse_status(value: str) -> Optional[TaskStatus]:
+    """todo / in_progress / in-progress / inprogress 를 모두 받아준다."""
+    if not value:
+        return None
+    norm = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    for st in TaskStatus:
+        if st.value == norm:
+            return st
+    return None
+
+
+async def _describe_assignee(ctx: ToolContext, task: Task) -> str:
+    if not task.assignee_id:
+        return "미배정"
+    if task.assignee_type == MemberType.AGENT:
+        a = await ctx.store.get_agent(task.assignee_id)
+        return f"@{a.name}" if a else task.assignee_id
+    h = await ctx.store.get_human(task.assignee_id)
+    return h.name if h else task.assignee_id
+
+
+@registry.register(
+    "create_task",
+    "추적이 필요한 일을 태스크로 만든다. 여러 단계가 걸리거나 나중에 확인해야 하는 일에 쓴다. "
+    "담당자를 지정하면 그 사람에게 자동으로 알림이 간다.",
+    {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "한 줄 제목"},
+            "description": {"type": "string", "description": "필요하면 부연 (생략 가능)"},
+            "assignee": {"type": "string",
+                         "description": "담당할 에이전트 이름 (@ 없이). 비워두면 미배정"},
+        },
+        "required": ["title"],
+    },
+)
+async def create_task(ctx: ToolContext, title: str, description: str = "",
+                      assignee: str = "") -> str:
+    assignee_type = assignee_id = None
+    target = None
+    if assignee:
+        target = await ctx.store.get_agent_by_name(ctx.agent.workspace_id, assignee)
+        if target is None:
+            return (f"오류: '{assignee}' 라는 에이전트가 없습니다. "
+                    "list_members 로 확인하거나 담당자 없이 만드세요.")
+        assignee_type, assignee_id = MemberType.AGENT, target.id
+
+    task = Task(
+        id=new_id("tsk"), channel_id=ctx.channel_id, title=title,
+        description=description,
+        status=TaskStatus.IN_PROGRESS if target else TaskStatus.TODO,
+        assignee_type=assignee_type, assignee_id=assignee_id,
+    )
+    await ctx.store.add_task(task)
+
+    # 태스크 스레드를 연다. 이후 진행 보고가 여기 쌓인다.
+    header = f"[태스크] {title}"
+    if target:
+        # 담당자를 멘션 → 기존 디스패처가 그를 깨운다. 별도 알림 경로 불필요.
+        header += f"\n@{target.name} 맡아주세요."
+    if description:
+        header += f"\n{description}"
+    msg = await ctx.emit(header)
+    await ctx.store.update_task(task.id, thread_id=msg.id)
+
+    who = f"@{target.name} 에게 배정" if target else "미배정"
+    return f"태스크 생성 ({task.id}, {who}). 진행 보고는 post_task_update 로 하세요."
+
+
+@registry.register(
+    "list_tasks",
+    "이 채널의 태스크 보드를 본다. 내가 맡을 일이 있는지, 뭐가 밀려 있는지 확인할 때 쓴다.",
+    {"type": "object", "properties": {}},
+)
+async def list_tasks(ctx: ToolContext) -> str:
+    tasks = await ctx.store.list_tasks(ctx.channel_id)
+    if not tasks:
+        return "태스크가 없습니다."
+    lines = []
+    for t in sorted(tasks, key=lambda x: x.created_at):
+        lines.append(f"- [{t.id}] {_STATUS_LABEL[t.status]} · "
+                     f"{await _describe_assignee(ctx, t)} · {t.title}")
+    return "\n".join(lines)
+
+
+@registry.register(
+    "claim_task",
+    "미배정 태스크를 내가 맡는다. 이미 담당자가 있으면 실패한다 — "
+    "그 경우 같은 일을 중복해서 하지 말고 다른 일을 찾는다.",
+    {
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}},
+        "required": ["task_id"],
+    },
+)
+async def claim_task(ctx: ToolContext, task_id: str) -> str:
+    task = await ctx.store.get_task(task_id)
+    if task is None:
+        return f"오류: 태스크 {task_id} 가 없습니다. list_tasks 로 확인하세요."
+    if task.channel_id != ctx.channel_id:
+        return "오류: 다른 채널의 태스크입니다."
+
+    if not await ctx.store.claim_task(task_id, MemberType.AGENT, ctx.agent.id):
+        current = await ctx.store.get_task(task_id)
+        holder = await _describe_assignee(ctx, current) if current else "누군가"
+        return (f"선점 실패 — 이미 {holder} 가 맡고 있습니다. "
+                "같은 일을 중복하지 말고 다른 태스크를 보세요.")
+    return f"태스크 {task_id} 를 맡았습니다 (진행 중). 완료하면 in_review 로 옮기세요."
+
+
+@registry.register(
+    "update_task_status",
+    "태스크 상태를 바꾼다. 일을 마쳤으면 in_review 로 옮겨 사람의 확인을 받는다. "
+    "스스로 done 으로 옮기지 않는다.",
+    {
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "status": {"type": "string",
+                       "enum": [s.value for s in TaskStatus],
+                       "description": "todo | in_progress | in_review | done"},
+            "note": {"type": "string", "description": "상태를 바꾸는 이유 한 줄 (생략 가능)"},
+        },
+        "required": ["task_id", "status"],
+    },
+)
+async def update_task_status(ctx: ToolContext, task_id: str, status: str,
+                             note: str = "") -> str:
+    parsed = _parse_status(status)
+    if parsed is None:
+        return (f"오류: 알 수 없는 상태 '{status}'. "
+                f"가능한 값: {', '.join(s.value for s in TaskStatus)}")
+
+    task = await ctx.store.get_task(task_id)
+    if task is None:
+        return f"오류: 태스크 {task_id} 가 없습니다."
+    if task.channel_id != ctx.channel_id:
+        return "오류: 다른 채널의 태스크입니다."
+
+    # 담당자가 아닌 에이전트가 남의 태스크를 건드리는 것을 막는다
+    if task.assignee_id and task.assignee_id != ctx.agent.id:
+        holder = await _describe_assignee(ctx, task)
+        return f"오류: 이 태스크의 담당자는 {holder} 입니다. 내 태스크만 옮길 수 있습니다."
+
+    # done 은 사람의 승인 영역이다. 에이전트는 in_review 까지만 간다.
+    if parsed == TaskStatus.DONE:
+        return ("오류: 에이전트는 태스크를 done 으로 옮길 수 없습니다. "
+                "in_review 로 옮기고 사람의 확인을 기다리세요.")
+
+    updated = await ctx.store.update_task(task_id, status=parsed)
+    line = f"[태스크] {updated.title} → {_STATUS_LABEL[parsed]}"
+    if note:
+        line += f" ({note})"
+    await ctx.emit(line, thread_id=task.thread_id)
+    return f"태스크 {task_id} 상태를 {parsed.value} 로 변경했습니다."
+
+
+@registry.register(
+    "post_task_update",
+    "태스크 스레드에 진행 상황을 올린다. 채널 타임라인을 어지럽히지 않는다.",
+    {
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "text": _STR},
+        "required": ["task_id", "text"],
+    },
+)
+async def post_task_update(ctx: ToolContext, task_id: str, text: str) -> str:
+    task = await ctx.store.get_task(task_id)
+    if task is None:
+        return f"오류: 태스크 {task_id} 가 없습니다."
+    await ctx.emit(text, thread_id=task.thread_id or task_id)
+    return f"태스크 {task_id} 스레드에 진행 보고를 올렸습니다."

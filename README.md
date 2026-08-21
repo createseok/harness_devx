@@ -138,6 +138,9 @@ DATABASE_URL="postgresql+asyncpg://genteam:genteam@127.0.0.1/genteam" \
 | GET | `/api/channels/{id}/members` | 로스터 조회 |
 | POST | `/api/channels/{id}/messages` | 메시지 게시 → **여기서 연쇄가 시작된다** |
 | GET | `/api/channels/{id}/messages` | 히스토리 조회 |
+| GET | `/api/channels/{id}/tasks` | 태스크 보드 (칸반 컬럼별) |
+| POST | `/api/channels/{id}/tasks` | 태스크 생성 |
+| PATCH | `/api/tasks/{id}` | 상태 변경 (사람만 `done` 가능) |
 | GET | `/api/channels/{id}/stream` | SSE 실시간 구독 |
 
 메시지 게시는 엔진에 넣고 즉시 응답한다. 에이전트 작업은 백그라운드에서 돌고
@@ -177,6 +180,21 @@ app/
 └── api/main.py           FastAPI
 ```
 
+## 태스크 보드
+
+GenTeam 규칙 그대로 — `todo → in_progress → in_review → done`, 태스크당 담당자 1명.
+
+**태스크 배정도 채널 메시지로 이뤄진다.** `create_task` 가 담당자를 멘션하는
+메시지를 올리면 기존 디스패처가 그를 깨운다. 태스크 전용 알림 경로를 따로
+만들지 않는다 — 채널이 곧 프로토콜이라는 원칙이 여기서도 유지된다.
+
+| 규칙 | 이유 |
+|---|---|
+| `claim_task` 는 원자적 선점 (`WHERE assignee_id IS NULL`) | 두 에이전트가 같은 일을 두 번 하는 것을 막는다. `claim_run` 과 같은 장치 |
+| 담당자가 아니면 상태를 못 바꾼다 | 남의 태스크를 건드려 진행 상황이 뒤엉키는 것을 막는다 |
+| 에이전트는 `done` 으로 못 옮긴다 | 완료 판정은 사람의 승인 영역. `in_review` 까지만 간다 |
+| 완료된 태스크는 컨텍스트에서 제외 | 보드가 커져도 프롬프트가 부풀지 않는다 |
+
 ## 폭주 제어
 
 멀티에이전트가 프로덕션에서 터지는 방식은 대부분 모델 품질이 아니라 이 넷이다.
@@ -202,8 +220,8 @@ app/
 - [x] **0단계** LLM 어댑터 — provider 팩토리 + claude_cli / anthropic / corp
 - [x] **1단계** 툴 루프 — `post_message` / `reply_in_thread`
 - [x] **2단계** 멀티 에이전트 + @멘션 라우팅 + 루프 가드
-- [ ] **3단계** 태스크 보드 — `create_task` / `claim_task` / `update_task_status`
-      → `tools.py` 하단에 등록만 하면 된다. `Task` 모델은 이미 있음
+- [x] **3단계** 태스크 보드 — `create_task` / `list_tasks` / `claim_task` /
+      `update_task_status` / `post_task_update`
 - [ ] **4단계** 메모리 — 채널 롤링 요약, pgvector 하이브리드 검색
       → `context.py`, `sql.py::search_messages`
 - [ ] **5단계** 파일/산출물, 코드 실행 샌드박스

@@ -131,6 +131,15 @@ def _msg(r: MessageRow) -> dm.Message:
     )
 
 
+def _task(r: "TaskRow") -> dm.Task:
+    return dm.Task(
+        id=r.id, channel_id=r.channel_id, title=r.title, description=r.description,
+        status=dm.TaskStatus(r.status),
+        assignee_type=dm.MemberType(r.assignee_type) if r.assignee_type else None,
+        assignee_id=r.assignee_id, thread_id=r.thread_id, created_at=r.created_at,
+    )
+
+
 def _agent(r: AgentRow) -> dm.Agent:
     return dm.Agent(
         id=r.id, workspace_id=r.workspace_id, name=r.name, role_prompt=r.role_prompt,
@@ -278,16 +287,42 @@ class SqlStore(Store):
             ))
         return task
 
+    async def get_task(self, task_id: str):
+        async with self.session() as s:
+            r = await s.get(TaskRow, task_id)
+            return _task(r) if r else None
+
+    async def claim_task(self, task_id: str, member_type: dm.MemberType,
+                         member_id: str) -> bool:
+        """담당자가 비어 있을 때만 UPDATE 한다.
+
+        WHERE assignee_id IS NULL 조건이 원자성을 만든다. 애플리케이션에서
+        읽고-검사하고-쓰면 두 워커가 동시에 통과할 수 있다.
+        """
+        from sqlalchemy import update
+        async with self.session() as s, s.begin():
+            stmt = (
+                update(TaskRow)
+                .where(TaskRow.id == task_id, TaskRow.assignee_id.is_(None))
+                .values(assignee_type=member_type.value, assignee_id=member_id,
+                        status=dm.TaskStatus.IN_PROGRESS.value)
+            )
+            result = await s.execute(stmt)
+            return result.rowcount == 1
+
+    async def update_task(self, task_id: str, *, status=None, thread_id=None):
+        async with self.session() as s, s.begin():
+            r = await s.get(TaskRow, task_id)
+            if r is None:
+                return None
+            if status is not None:
+                r.status = status.value
+            if thread_id is not None:
+                r.thread_id = thread_id
+            await s.flush()
+            return _task(r)
+
     async def list_tasks(self, channel_id: str):
         async with self.session() as s:
             q = select(TaskRow).where(TaskRow.channel_id == channel_id)
-            return [
-                dm.Task(
-                    id=r.id, channel_id=r.channel_id, title=r.title,
-                    description=r.description, status=dm.TaskStatus(r.status),
-                    assignee_type=dm.MemberType(r.assignee_type) if r.assignee_type else None,
-                    assignee_id=r.assignee_id, thread_id=r.thread_id,
-                    created_at=r.created_at,
-                )
-                for r in (await s.execute(q)).scalars().all()
-            ]
+            return [_task(r) for r in (await s.execute(q)).scalars().all()]

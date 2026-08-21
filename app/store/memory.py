@@ -5,7 +5,8 @@ import asyncio
 from typing import Dict, List, Optional, Set
 
 from app.core.models import (
-    Agent, AgentRun, Channel, ChannelMember, Human, Message, MessageKind, Task,
+    Agent, AgentRun, Channel, ChannelMember, Human, MemberType, Message,
+    MessageKind, Task, TaskStatus,
 )
 from app.store.base import Store
 
@@ -127,3 +128,29 @@ class InMemoryStore(Store):
 
     async def list_tasks(self, channel_id: str) -> List[Task]:
         return [t for t in self.tasks.values() if t.channel_id == channel_id]
+
+    async def get_task(self, task_id: str) -> Optional[Task]:
+        return self.tasks.get(task_id)
+
+    async def claim_task(self, task_id: str, member_type: MemberType,
+                         member_id: str) -> bool:
+        async with self._lock:
+            task = self.tasks.get(task_id)
+            if task is None or task.assignee_id is not None:
+                return False
+            task.assignee_type = member_type
+            task.assignee_id = member_id
+            if task.status == TaskStatus.TODO:
+                task.status = TaskStatus.IN_PROGRESS
+            return True
+
+    async def update_task(self, task_id: str, *, status: Optional[TaskStatus] = None,
+                          thread_id: Optional[str] = None) -> Optional[Task]:
+        task = self.tasks.get(task_id)
+        if task is None:
+            return None
+        if status is not None:
+            task.status = status
+        if thread_id is not None:
+            task.thread_id = thread_id
+        return task

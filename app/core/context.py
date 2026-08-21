@@ -6,13 +6,14 @@
 Phase 4에서 확장할 지점:
   - 채널 롤링 요약 (K개 메시지마다 백그라운드 생성)
   - 에이전트 장기 메모리 검색 (pgvector 하이브리드)
-  - 태스크 보드 현황 주입
 """
 from __future__ import annotations
 
 from typing import List, Optional
 
-from app.core.models import Agent, Channel, MemberType, Message, MessageKind
+from app.core.models import (
+    Agent, Channel, MemberType, Message, MessageKind, Task, TaskStatus,
+)
 from app.store.base import Store
 
 MAX_HISTORY = 30
@@ -24,6 +25,33 @@ def _fmt(m: Message, *, highlight_id: Optional[str] = None) -> str:
     tag = "  ← 지금 처리해야 할 메시지" if m.id == highlight_id else ""
     thread = f" (스레드 {m.thread_id[:10]})" if m.thread_id else ""
     return f"[{m.author_name}]{thread} {text}{tag}"
+
+
+_STATUS_LABEL = {
+    TaskStatus.TODO: "할 일",
+    TaskStatus.IN_PROGRESS: "진행 중",
+    TaskStatus.IN_REVIEW: "검토 요청",
+    TaskStatus.DONE: "완료",
+}
+
+
+async def _task_board(store: Store, agent: Agent, channel_id: str) -> str:
+    """태스크 보드 현황. 완료된 것은 빼서 컨텍스트를 아낀다."""
+    tasks = [t for t in await store.list_tasks(channel_id)
+             if t.status != TaskStatus.DONE]
+    if not tasks:
+        return ""
+    lines = ["\n## 태스크 보드"]
+    for t in sorted(tasks, key=lambda x: x.created_at):
+        if t.assignee_id == agent.id:
+            who = "**내 담당**"
+        elif t.assignee_id is None:
+            who = "미배정 — claim_task 로 맡을 수 있음"
+        else:
+            other = await store.get_agent(t.assignee_id)
+            who = f"@{other.name}" if other else "다른 담당자"
+        lines.append(f"  - [{t.id}] {_STATUS_LABEL[t.status]} · {who} · {t.title}")
+    return "\n".join(lines)
 
 
 async def build_context_block(
@@ -51,6 +79,7 @@ async def build_context_block(
                 roster.append(f"  - {h.name} (사람)")
 
     history = await store.recent_messages(channel.id, limit=history_limit)
+    task_block = await _task_board(store, agent, channel.id)
 
     # 스레드에서 트리거된 경우 해당 스레드 전문을 따로 붙인다
     thread_block = ""
@@ -70,6 +99,8 @@ async def build_context_block(
         "## 최근 대화",
         "\n".join(_fmt(m, highlight_id=trigger.id) for m in history) or "  (없음)",
     ]
+    if task_block:
+        lines.append(task_block)
     if thread_block:
         lines.append(thread_block)
 
