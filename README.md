@@ -128,6 +128,8 @@ PYTHONPATH=. .venv/bin/python scripts/seed_api.py
 - 하단 `⋯ 기획자 작업 중` — `claude -p` 는 호출당 1~2분이라 이 표시가 없으면
   멈춘 것인지 도는 것인지 알 수 없다 (`/activity` 를 2.5초마다 폴링)
 - SSE 로 에이전트 발화가 실시간으로 흘러들어온다
+- **채널 +** 로 새 채널/프로젝트 생성, **멤버 +** 로 에이전트 추가
+  (기존 에이전트 선택 · 역할 템플릿 8종으로 새로 만들기 · 멤버 제거)
 - 입력창에서 `@` 를 치면 멤버 자동완성 (↑↓ 이동 · Enter/Tab 선택 · Esc 닫기).
   한글 조합 중 Enter 는 글자 확정으로 처리해 전송·선택이 일어나지 않는다
 
@@ -179,6 +181,7 @@ createdb genteam_test   # 테스트 전용 DB — 테스트는 TRUNCATE 를 한�
 | POST | `/api/agents` | 에이전트 생성 (name = @멘션 핸들) |
 | POST | `/api/channels` | 채널 생성 |
 | POST | `/api/channels/{id}/members` | 사람·에이전트 초대 |
+| DELETE | `/api/channels/{id}/members/{type}/{id}` | 채널에서 빼기 (에이전트 자체는 유지) |
 | GET | `/api/channels/{id}/members` | 로스터 조회 |
 | POST | `/api/channels/{id}/messages` | 메시지 게시 → **여기서 연쇄가 시작된다** |
 | GET | `/api/channels/{id}/messages` | 히스토리 조회 |

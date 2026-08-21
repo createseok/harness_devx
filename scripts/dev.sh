@@ -82,4 +82,5 @@ exec env \
   DATABASE_URL="$DB_URL" \
   LLM_PROVIDER="$PROVIDER" \
   PYTHONPATH=. \
-  .venv/bin/uvicorn app.api.main:app --host 127.0.0.1 --port "$PORT"
+  .venv/bin/uvicorn app.api.main:app --host 127.0.0.1 --port "$PORT" \
+    ${NO_RELOAD:+} ${NO_RELOAD:---reload --reload-dir app}

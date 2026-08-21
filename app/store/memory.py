@@ -120,6 +120,22 @@ class InMemoryStore(Store):
     async def channel_members(self, channel_id: str) -> List[ChannelMember]:
         return list(self.members.get(channel_id, []))
 
+    async def add_member(self, member: ChannelMember) -> bool:
+        existing = self.members.setdefault(member.channel_id, [])
+        if any(x.member_type == member.member_type and x.member_id == member.member_id
+               for x in existing):
+            return False
+        existing.append(member)
+        return True
+
+    async def remove_member(self, channel_id: str, member_type: MemberType,
+                            member_id: str) -> bool:
+        existing = self.members.get(channel_id, [])
+        keep = [x for x in existing
+                if not (x.member_type == member_type and x.member_id == member_id)]
+        self.members[channel_id] = keep
+        return len(keep) != len(existing)
+
     async def get_channel(self, channel_id: str) -> Optional[Channel]:
         return self.channels.get(channel_id)
 

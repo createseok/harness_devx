@@ -42,7 +42,15 @@ aside { border-right: 1px solid var(--border); }
 main { display: flex; flex-direction: column; min-width: 0; }
 
 .sec { padding: 14px 14px 6px; font-size: 11px; font-weight: 700;
-       letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+       letter-spacing: .08em; text-transform: uppercase; color: var(--faint);
+       display: flex; align-items: center; justify-content: space-between; }
+.sec button { background: none; color: var(--faint); font-size: 16px; line-height: 1;
+              padding: 0 4px; border-radius: 5px; font-weight: 400; }
+.sec button:hover { background: var(--panel-2); color: var(--accent); }
+.row .x { opacity: 0; background: none; color: var(--faint); font-size: 15px;
+          line-height: 1; padding: 0 3px; border-radius: 4px; flex: none; }
+.row:hover .x { opacity: 1; }
+.row .x:hover { background: var(--panel); color: #e5484d; }
 .row { display: flex; align-items: center; gap: 8px; padding: 7px 14px;
        cursor: pointer; border-left: 2px solid transparent; }
 .row:hover { background: var(--panel-2); }
@@ -142,14 +150,53 @@ button:disabled { opacity: .45; cursor: default; }
   aside { display: none; }
 }
 @media (prefers-color-scheme: dark) { .err { background: #3a1f22; color: #f9a; border-color: #5a2f33; } }
+
+/* 모달 */
+#modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+         background: rgba(0,0,0,.45); padding: 20px; }
+#modal[hidden] { display: none; }
+.sheet { background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+         box-shadow: 0 12px 40px rgba(0,0,0,.3); width: min(520px, 100%);
+         max-height: min(90vh, 720px); display: flex; flex-direction: column; }
+.sheet h2 { font-size: 15px; padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
+.sheet .body { padding: 16px 18px; overflow-y: auto; min-height: 0; }
+.sheet .foot { display: flex; gap: 8px; justify-content: flex-end;
+               padding: 12px 18px 16px; border-top: 1px solid var(--border); }
+.sheet .foot .ghost { background: none; color: var(--muted); }
+.sheet .foot .ghost:hover { background: var(--panel-2); }
+.fld { margin-bottom: 14px; }
+.fld label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px; }
+.fld .help { font-size: 11px; color: var(--faint); font-weight: 400; margin-left: 6px; }
+.fld input[type=text], .fld textarea, .fld select {
+  width: 100%; font: inherit; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.fld textarea { resize: vertical; min-height: 88px; }
+.fld input:focus, .fld textarea:focus, .fld select:focus {
+  outline: none; border-color: var(--accent); }
+.tabs { display: flex; gap: 4px; padding: 12px 18px 0; }
+.tabs button { background: none; color: var(--muted); font-size: 13px; padding: 6px 12px;
+               border-radius: 7px 7px 0 0; }
+.tabs button.on { background: var(--panel-2); color: var(--text); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.chips button { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+                font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 99px; }
+.chips button:hover, .chips button.on { border-color: var(--accent); color: var(--accent); }
+.pick { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: 8px;
+        cursor: pointer; border: 1px solid transparent; }
+.pick:hover { background: var(--panel-2); }
+.pick.on { background: var(--accent-soft); border-color: var(--accent); }
+.pick .nm { font-weight: 600; flex: none; }
+.pick .ro { color: var(--muted); font-size: 12px; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap; }
+.modal-err { color: #e5484d; font-size: 12px; margin-bottom: 10px; }
 </style>
 </head>
 <body>
 
 <aside>
-  <div class="sec">채널</div>
+  <div class="sec">채널 <button id="addChannel" title="새 채널">+</button></div>
   <div id="channels"></div>
-  <div class="sec">멤버</div>
+  <div class="sec">멤버 <button id="addMember" title="에이전트 추가">+</button></div>
   <div id="members"></div>
 </aside>
 
@@ -170,6 +217,8 @@ button:disabled { opacity: .45; cursor: default; }
 </main>
 
 <div class="board" id="board"></div>
+
+<div id="modal" hidden></div>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -234,12 +283,29 @@ async function loadMembers() {
   const ms = await api(`/api/channels/${channel}/members`);
   // 에이전트를 먼저 — @멘션의 주 용도다
   members = [...ms].sort((a, b) => (a.type === b.type ? 0 : a.type === "agent" ? -1 : 1));
-  $("#members").innerHTML = ms.map((m) => `
-    <div class="row" title="${esc(m.role || "")}">
+  $("#members").innerHTML = ms.map((m, i) => `
+    <div class="row" title="${esc(m.role || "")}" data-i="${i}">
       <span class="dot ${m.type}"></span>
       <span class="nm">${esc(m.name)}</span>
       ${m.type === "agent" ? `<span class="tag">${m.reply_mode === "all" ? "전체" : "@멘션"}</span>` : ""}
+      <button type="button" class="x" title="채널에서 빼기">×</button>
     </div>`).join("");
+  $("#members").querySelectorAll(".row").forEach((row) => {
+    row.querySelector(".x").onclick = (e) => { e.stopPropagation(); removeMember(ms[+row.dataset.i]); };
+  });
+}
+
+// 채널 목록을 다시 그린다. selectId 가 있으면 그 채널을 연다.
+async function refreshChannels(selectId) {
+  const channels = await api(`/api/channels?workspace_id=${WS}`);
+  $("#channels").innerHTML = channels.map((c) =>
+    `<div class="row" data-id="${c.id}"><span class="nm"># ${esc(c.name)}</span></div>`).join("");
+  channels.forEach((c) => {
+    $(`#channels .row[data-id="${c.id}"]`).onclick = () => selectChannel(c);
+  });
+  const target = channels.find((c) => c.id === (selectId || channel)) || channels[0];
+  if (target) await selectChannel(target);
+  return channels;
 }
 
 async function loadBoard() {
@@ -299,26 +365,206 @@ async function boot() {
     ]);
     agents = agentList;
     if (!channels.length) {
-      fail("채널이 없습니다.  PYTHONPATH=. .venv/bin/python scripts/seed_api.py  를 먼저 실행하세요.");
+      // 채널이 하나도 없으면 시드 없이도 시작할 수 있게 사람만 만들어 둔다
+      human = await api("/api/humans", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: WS, name: "나" }),
+      });
+      $("#feed").innerHTML =
+        '<div class="hint">채널이 없습니다. 왼쪽 <b>채널 +</b> 로 만들어보세요.</div>';
+      setInterval(loadActivity, 2500);
       return;
     }
-    $("#channels").innerHTML = channels.map((c) =>
-      `<div class="row" data-id="${c.id}"><span class="nm"># ${esc(c.name)}</span></div>`).join("");
-    channels.forEach((c) => {
-      $(`#channels .row[data-id="${c.id}"]`).onclick = () => selectChannel(c);
-    });
-
     // 사람 계정을 하나 확보한다 (없으면 만든다)
     const first = channels[0];
-    const members = await api(`/api/channels/${first.id}/members`);
-    const me = members.find((m) => m.type === "human");
+    const roster = await api(`/api/channels/${first.id}/members`);
+    const me = roster.find((m) => m.type === "human");
     human = me || await api("/api/humans", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspace_id: WS, name: "나" }),
     });
-    await selectChannel(first);
+    await refreshChannels(first.id);
     setInterval(loadActivity, 2500);
   } catch (e) { fail("서버에 연결하지 못했습니다: " + e.message); }
+}
+
+// ── 역할 템플릿 ───────────────────────────────────────────────────────
+// 처음부터 JD 를 쓰라고 하면 대부분 "너는 도우미다" 수준으로 적고 끝난다.
+// 역할이 구체적일수록 위임과 협업이 제대로 돈다.
+const TEMPLATES = [
+  ["기획자", "너는 팀의 PM이다. 요청을 받으면 스스로 다 하려 하지 말고 일을 쪼개 적임자에게 위임하고, 결과를 종합해 사람에게 보고한다. 결정이 필요한 지점은 선택지와 함께 사람에게 올린다."],
+  ["데이터분석가", "너는 데이터 분석가다. 지표를 축별로 쪼개 원인을 특정하고 숫자로 말한다. 데이터가 없으면 없다고 하고 무엇이 필요한지 구체적으로 요청한다. 추측은 추측이라고 명시한다."],
+  ["개발자", "너는 백엔드 개발자다. 코드 레벨 원인과 구체적인 조치안을 우선순위·소요시간·리스크와 함께 제시한다. 확인 없이 단정하지 않는다."],
+  ["프론트개발자", "너는 프론트엔드 개발자다. UI/UX 관점에서 문제를 짚고 구현 방안을 제시한다. 브라우저 호환성과 접근성을 함께 고려한다."],
+  ["QA", "너는 QA 엔지니어다. 변경사항에서 깨질 수 있는 지점을 찾아 재현 절차와 함께 알린다. 엣지 케이스와 회귀 위험을 우선한다."],
+  ["리서처", "너는 리서처다. 주어진 주제를 조사해 출처와 함께 정리한다. 확인된 것과 추정을 명확히 구분하고, 모르는 것은 모른다고 한다."],
+  ["카피라이터", "너는 카피라이터다. 대상 독자와 목적을 먼저 확인하고, 짧고 명확한 문안을 몇 가지 안으로 제시한다."],
+  ["법무검토", "너는 사내 법무 담당이다. 계약·정책·규제 관점의 리스크를 짚는다. 최종 판단은 변호사 검토가 필요하다는 점을 항상 명시한다."],
+];
+
+// ── 모달 ──────────────────────────────────────────────────────────────
+function closeModal() { $("#modal").hidden = true; $("#modal").innerHTML = ""; }
+
+function openModal(title, bodyHtml, onSubmit, submitLabel = "만들기") {
+  const m = $("#modal");
+  m.innerHTML = `<div class="sheet">
+    <h2>${esc(title)}</h2>
+    <div class="body"><div class="modal-err" id="mErr" hidden></div>${bodyHtml}</div>
+    <div class="foot">
+      <button type="button" class="ghost" id="mCancel">취소</button>
+      <button type="button" id="mOk">${esc(submitLabel)}</button>
+    </div></div>`;
+  m.hidden = false;
+  m.onclick = (e) => { if (e.target === m) closeModal(); };
+  $("#mCancel").onclick = closeModal;
+  $("#mOk").onclick = async () => {
+    $("#mOk").disabled = true;
+    try { await onSubmit(); }
+    catch (err) { modalErr(err.message); }
+    $("#mOk").disabled = false;
+  };
+  document.onkeydown = (e) => { if (e.key === "Escape" && !m.hidden) closeModal(); };
+  const first = m.querySelector("input, textarea");
+  if (first) first.focus();
+}
+
+function modalErr(msg) {
+  const el = $("#mErr");
+  // FastAPI 검증 오류는 detail 배열로 온다 — 사람이 읽을 부분만 꺼낸다
+  let text = msg;
+  try {
+    const j = JSON.parse(msg.replace(/^\d+\s/, ""));
+    if (Array.isArray(j.detail)) text = j.detail.map((d) => d.msg.replace(/^Value error, /, "")).join("\n");
+    else if (typeof j.detail === "string") text = j.detail;
+  } catch (_) { /* 평문이면 그대로 */ }
+  el.textContent = text;
+  el.hidden = false;
+}
+
+// ── 새 채널 ───────────────────────────────────────────────────────────
+$("#addChannel").onclick = () => {
+  openModal("새 채널", `
+    <div class="fld"><label>이름<span class="help">예: 결제-이슈, 3분기-기획</span></label>
+      <input type="text" id="cName" placeholder="채널 이름"></div>
+    <div class="fld"><label>주제<span class="help">선택</span></label>
+      <input type="text" id="cTopic" placeholder="이 채널에서 무엇을 다루나요?"></div>
+  `, async () => {
+    const name = $("#cName").value.trim();
+    if (!name) return modalErr("채널 이름을 입력하세요.");
+    const ch = await api("/api/channels", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace_id: WS, name, topic: $("#cTopic").value.trim() }),
+    });
+    // 채널을 만든 사람을 자동으로 넣는다. 사람이 없으면 로스터가 에이전트뿐이 된다.
+    await api(`/api/channels/${ch.id}/members`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ member_type: "human", member_id: human.id }),
+    });
+    closeModal();
+    await refreshChannels(ch.id);
+  });
+};
+
+// ── 멤버 추가 ─────────────────────────────────────────────────────────
+let pickTab = "existing", picked = new Set();
+
+async function openMemberModal() {
+  const all = await api(`/api/agents?workspace_id=${WS}`);
+  const inChannel = new Set(members.filter((m) => m.type === "agent").map((m) => m.id));
+  const available = all.filter((a) => !inChannel.has(a.id));
+  picked = new Set();
+  pickTab = available.length ? "existing" : "new";
+  render();
+
+  function render() {
+    const existing = available.length
+      ? available.map((a) => `<div class="pick ${picked.has(a.id) ? "on" : ""}" data-id="${a.id}">
+          <span class="dot agent"></span><span class="nm">${esc(a.name)}</span>
+          <span class="ro">${esc(a.role_prompt.split("\n")[0].slice(0, 60))}</span></div>`).join("")
+      : '<div class="empty">추가할 수 있는 에이전트가 없습니다. 새로 만드세요.</div>';
+
+    const fresh = `
+      <div class="chips" id="tpl">${TEMPLATES.map((t, i) =>
+        `<button type="button" data-i="${i}">${esc(t[0])}</button>`).join("")}</div>
+      <div class="fld"><label>이름<span class="help">@멘션 핸들 · 공백 불가</span></label>
+        <input type="text" id="aName" placeholder="예: 기획자"></div>
+      <div class="fld"><label>역할<span class="help">구체적일수록 잘 협업합니다</span></label>
+        <textarea id="aRole" placeholder="이 에이전트가 무엇을 담당하고 어떻게 일하는지 적어주세요."></textarea></div>
+      <div class="fld"><label>응답 조건</label>
+        <select id="aMode">
+          <option value="mention">@멘션 됐을 때만 (권장)</option>
+          <option value="all">채널의 모든 메시지에 반응</option>
+        </select></div>`;
+
+    openModal("에이전트 추가", `
+      <div class="tabs" style="padding:0 0 12px">
+        <button type="button" class="${pickTab === "existing" ? "on" : ""}" data-tab="existing">기존에서 선택</button>
+        <button type="button" class="${pickTab === "new" ? "on" : ""}" data-tab="new">새로 만들기</button>
+      </div>
+      ${pickTab === "existing" ? existing : fresh}
+    `, submit, pickTab === "existing" ? "채널에 추가" : "만들고 추가");
+
+    $("#modal").querySelectorAll(".tabs button").forEach((b) => {
+      b.onclick = () => { pickTab = b.dataset.tab; render(); };
+    });
+    $("#modal").querySelectorAll(".pick").forEach((el) => {
+      el.onclick = () => {
+        const id = el.dataset.id;
+        picked.has(id) ? picked.delete(id) : picked.add(id);
+        el.classList.toggle("on");
+      };
+    });
+    const tpl = $("#tpl");
+    if (tpl) tpl.querySelectorAll("button").forEach((b) => {
+      b.onclick = () => {
+        const [name, role] = TEMPLATES[+b.dataset.i];
+        $("#aName").value = name;
+        $("#aRole").value = role;
+        tpl.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+        b.classList.add("on");
+      };
+    });
+  }
+
+  async function submit() {
+    if (pickTab === "existing") {
+      if (!picked.size) return modalErr("추가할 에이전트를 선택하세요.");
+      for (const id of picked) {
+        await api(`/api/channels/${channel}/members`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ member_type: "agent", member_id: id }),
+        });
+      }
+    } else {
+      const name = $("#aName").value.trim();
+      const role = $("#aRole").value.trim();
+      if (!name || !role) return modalErr("이름과 역할을 모두 입력하세요.");
+      const agent = await api("/api/agents", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: WS, name, role_prompt: role,
+                               reply_mode: $("#aMode").value }),
+      });
+      await api(`/api/channels/${channel}/members`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_type: "agent", member_id: agent.id }),
+      });
+    }
+    closeModal();
+    await loadMembers();
+  }
+}
+
+$("#addMember").onclick = () => {
+  if (!channel) return;
+  openMemberModal().catch((e) => fail(e.message));
+};
+
+async function removeMember(m) {
+  if (!confirm(`${m.name} 을(를) 이 채널에서 빼시겠습니까?\n(에이전트 자체는 삭제되지 않습니다)`)) return;
+  try {
+    await api(`/api/channels/${channel}/members/${m.type}/${m.id}`, { method: "DELETE" });
+    await loadMembers();
+  } catch (e) { fail("제거 실패: " + e.message); }
 }
 
 // ── @멘션 자동완성 ────────────────────────────────────────────────────

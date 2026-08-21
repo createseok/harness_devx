@@ -65,6 +65,14 @@ class Store(abc.ABC):
     async def channel_members(self, channel_id: str) -> List[ChannelMember]: ...
 
     @abc.abstractmethod
+    async def add_member(self, member: ChannelMember) -> bool:
+        """채널에 멤버를 넣는다. 이미 있으면 False."""
+
+    @abc.abstractmethod
+    async def remove_member(self, channel_id: str, member_type: MemberType,
+                            member_id: str) -> bool: ...
+
+    @abc.abstractmethod
     async def get_channel(self, channel_id: str) -> Optional[Channel]: ...
 
     @abc.abstractmethod

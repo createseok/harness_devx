@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
 from app.core.bus import bus
@@ -24,6 +24,7 @@ from app.core.models import (
     Agent, Channel, ChannelMember, Human, MemberType, Message, ReplyMode,
     Task, TaskStatus, new_id,
 )
+from app.core.router import MENTION_RE
 from app.core.tools import registry
 from app.llm.base import LLMProvider
 from app.store.base import Store
@@ -102,7 +103,33 @@ class CreateAgent(BaseModel):
     role_prompt: str
     model: Optional[str] = None
     reply_mode: ReplyMode = ReplyMode.MENTION
-    max_steps: int = 8
+    max_steps: int = Field(8, ge=1, le=20)
+
+    @field_validator("name")
+    @classmethod
+    def valid_handle(cls, v: str) -> str:
+        """디스패처의 MENTION_RE 와 같은 문자만 허용한다.
+
+        공백이나 특수문자가 들어가면 '@김 기획' 이 '@김' 까지만 파싱돼
+        영영 호출되지 않는 에이전트가 만들어진다.
+        """
+        v = v.strip().lstrip("@")
+        if not v:
+            raise ValueError("이름이 비어 있습니다")
+        if not MENTION_RE.fullmatch("@" + v):
+            raise ValueError(
+                "이름에는 한글·영문·숫자·밑줄·하이픈만 쓸 수 있습니다 "
+                "(공백 불가 — @멘션으로 부를 수 없게 됩니다)")
+        return v
+
+    @field_validator("role_prompt")
+    @classmethod
+    def has_role(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 10:
+            raise ValueError("역할 설명을 10자 이상 적어주세요. "
+                             "이게 에이전트의 행동을 결정합니다.")
+        return v
 
 
 class CreateHuman(BaseModel):
@@ -250,15 +277,22 @@ async def create_channel(body: CreateChannel, store: Store = Depends(get_store))
 async def add_member(channel_id: str, body: AddMember, store: Store = Depends(get_store)):
     if not await store.get_channel(channel_id):
         raise HTTPException(404, "채널이 없습니다")
-    cm = ChannelMember(channel_id, body.member_type, body.member_id, body.reply_mode)
-    if hasattr(store, "join"):
-        store.join(cm)
-    else:
-        from app.store.sql import MemberRow
-        async with store.session() as s, s.begin():
-            s.add(MemberRow(channel_id=channel_id, member_type=body.member_type.value,
-                            member_id=body.member_id,
-                            reply_mode=body.reply_mode.value if body.reply_mode else None))
+    if body.member_type == MemberType.AGENT:
+        if not await store.get_agent(body.member_id):
+            raise HTTPException(404, "에이전트가 없습니다")
+    elif not await store.get_human(body.member_id):
+        raise HTTPException(404, "사용자가 없습니다")
+
+    added = await store.add_member(
+        ChannelMember(channel_id, body.member_type, body.member_id, body.reply_mode))
+    return {"ok": True, "added": added}   # added=False 면 이미 멤버였다는 뜻
+
+
+@app.delete("/api/channels/{channel_id}/members/{member_type}/{member_id}")
+async def remove_member(channel_id: str, member_type: MemberType, member_id: str,
+                        store: Store = Depends(get_store)):
+    if not await store.remove_member(channel_id, member_type, member_id):
+        raise HTTPException(404, "채널에 없는 멤버입니다")
     return {"ok": True}
 
 

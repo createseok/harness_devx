@@ -303,6 +303,29 @@ class SqlStore(Store):
                 for r in (await s.execute(q)).scalars().all()
             ]
 
+    async def add_member(self, member: dm.ChannelMember) -> bool:
+        from sqlalchemy.exc import IntegrityError
+        try:
+            async with self.session() as s, s.begin():
+                s.add(MemberRow(
+                    channel_id=member.channel_id,
+                    member_type=member.member_type.value,
+                    member_id=member.member_id,
+                    reply_mode=member.reply_mode.value if member.reply_mode else None))
+            return True
+        except IntegrityError:
+            return False   # UNIQUE(channel_id, member_type, member_id)
+
+    async def remove_member(self, channel_id: str, member_type: dm.MemberType,
+                            member_id: str) -> bool:
+        from sqlalchemy import delete
+        async with self.session() as s, s.begin():
+            r = await s.execute(delete(MemberRow).where(
+                MemberRow.channel_id == channel_id,
+                MemberRow.member_type == member_type.value,
+                MemberRow.member_id == member_id))
+            return r.rowcount > 0
+
     async def get_channel(self, channel_id: str) -> Optional[dm.Channel]:
         async with self.session() as s:
             r = await s.get(ChannelRow, channel_id)
